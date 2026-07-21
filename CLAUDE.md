@@ -295,12 +295,22 @@ cold start. Free managed Postgres was ruled out by measurement: gold is
   (Route Explorer origin change and carrier/family mode toggle, both
   re-query cleanly) + a real headless server boot on all 4 routes (200s,
   clean log).
-- Not yet done: publishing files to a GitHub Release, and the Community
-  Cloud deploy itself (secrets: `T100_BACKEND=duckdb`,
-  `T100_PARQUET_URL=<release download URL>`).
-- **`export/out/*.parquet` is now stale** — built 2026-07-19 from data that
-  topped out at March 2026; the 2026-07-20 monthly load (below) added April.
-  Re-run `export/export_gold.py` before publishing to a Release.
+- **Repo + Release published 2026-07-21**: local dir git-init'd, pushed to
+  `https://github.com/Tfields/t100-route-explorer` (public). Re-ran
+  `export/export_gold.py` first (confirmed `max(flight_month) = 2026-04-01`
+  post-April-load) — 83.4 MB total, same table sizes as the 07-19 export.
+  Assets published to Release tag `gold-2026-04`; `T100_PARQUET_URL =
+  https://github.com/Tfields/t100-route-explorer/releases/download/gold-2026-04`
+  (per-table `<name>.parquet`, verified resolves via signed blob redirect).
+  **Gotcha:** `gh release create <tag> <files...>` (assets in the same
+  command) intermittently 422'd with `ReleaseAsset.name already exists` and
+  the release vanished entirely on failure (not left in a partial state) —
+  worked around by creating the release with no assets, then
+  `gh release upload <tag> <file> --clobber` per file in a loop.
+- **Not yet done: the Community Cloud deploy itself** (share.streamlit.io UI,
+  no CLI/API) — connect repo `Tfields/t100-route-explorer`, branch `main`,
+  main file `app/Route_Explorer.py`; set secrets `T100_BACKEND=duckdb` and
+  `T100_PARQUET_URL` (value above).
 
 ## Monthly incremental load — first real run (2026-07-20)
 Ran the routine `README.md`/open-item #1 describes (by hand, not yet
