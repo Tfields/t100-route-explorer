@@ -4,19 +4,24 @@ Project memory for Claude Code. Read this before doing anything; it captures
 decisions already made so you don't re-derive or contradict them.
 
 ## What this is
-A medallion-structured Postgres warehouse for BTS T-100 airline traffic data.
-All three layers are built and tested: bronze (landing + ingestion), silver
-(typed/decoded/geolocated matviews), gold (chart-ready aggregates). Next work:
-**visualizations** (local EDA on hub utilization).
+A medallion-structured Postgres warehouse for BTS T-100 airline traffic data,
+plus a Streamlit app over it. All three layers are built and tested: bronze
+(landing + ingestion), silver (typed/decoded/geolocated matviews), gold
+(chart-ready aggregates + carrier-family rollups). The app (4 pages) and a
+free-tier hosting path (DuckDB + Parquet via GitHub Release, see HOSTING
+below) are both built; the Community Cloud deploy itself is the one
+remaining manual step (see open items in HOSTING).
 
 ## Stack
-- Postgres 16 (Docker via `docker-compose.yml`, or any existing PG). On this
-  Mac the container runtime is **Colima + docker CLI** (chosen over Docker
-  Desktop: free, no GUI, no extra admin prompts, fully scriptable; the compose
-  file works unchanged)
+- Postgres 16 (Docker via `docker-compose.yml`, or any existing PG). Local
+  dev uses **Colima + docker CLI** as the container runtime (chosen over
+  Docker Desktop: free, no GUI, no extra admin prompts, fully scriptable;
+  the compose file works unchanged)
 - Python loader, `psycopg2-binary` only (stdlib `urllib` for downloads).
-  CI uses 3.12; the Mac's system 3.9 works too (venv at `.venv/`)
+  CI uses 3.12; any Python 3.9+ works locally (venv at `.venv/`)
 - Layers are **schemas in one database** (`bronze`, `silver`, `gold`, `meta`)
+- Device-specific setup details (exact toolchain versions on any one
+  contributor's machine) belong in a gitignored `CLAUDE.local.md`, not here.
 
 ## Layout
 ```
@@ -35,8 +40,11 @@ ingest/backfill.sh          one-time historical pull (loop years x flavors)
 ingest/requirements.txt
 notebooks/hub_utilization_eda.ipynb  local EDA (Jupyter+plotly; deps in notebooks/requirements.txt)
 app/Route_Explorer.py       Streamlit app entry (run: .venv/bin/streamlit run app/Route_Explorer.py)
-app/pages/2_Hub_Utilization.py  second page; app/warehouse.py shared cached query helper
-app/pages/4_Carrier_Families.py family mergers + route churn (see STREAMLIT APP)
+app/pages/2_Hub_Utilization.py  hub-weight/fortress charts + spoke map
+app/pages/3_Destinations.py     nonstops from one airport + performers/momentum
+app/pages/4_Carrier_Families.py family mergers + route churn
+app/warehouse.py            shared cached query helper (postgres or duckdb backend, see HOSTING)
+export/export_gold.py       gold + dim_carrier_family -> zstd Parquet, for the DuckDB-backed hosted app
 .github/workflows/ingest.yml monthly scheduled run
 ```
 
@@ -121,10 +129,10 @@ docker exec t100_postgres psql -U t100 -d t100 -c "SELECT gold.refresh_all();"
   deployments set a real password and use env/secrets, not the compose default.
 
 ## Open items
-1. **Monthly run on this machine.** GitHub Actions can't reach a laptop-local
-   DB; schedule the four `--year latest` + `--year prev` loads via launchd/cron
-   locally (or run them by hand after each BTS release), followed by
-   `SELECT gold.refresh_all();`.
+1. **Monthly run without a hosted DB.** GitHub Actions can't reach a database
+   that only lives on a local machine; schedule the four `--year latest` +
+   `--year prev` loads via launchd/cron locally (or run them by hand after
+   each BTS release), followed by `SELECT gold.refresh_all();`.
 2. **Remaining unwired lookups** (low value): `l_carrier` (carrier names come
    inline in the facts), `l_world_area_code`, `l_distance_group_500` — the
    `Download_Lookup.asp` pattern covers them if ever needed.
@@ -256,7 +264,7 @@ dehubbing gallery (CVG/STL/PIT/MEM/CLE), ATL spoke map. All queries hit gold;
 
 ## HOSTING (in progress — free-tier plan)
 Target: **Streamlit Community Cloud (free) + gold as Parquet + DuckDB** — no
-hosted database. Laptop stays the warehouse; after each monthly refresh,
+hosted database. The local machine stays the warehouse; after each monthly refresh,
 export gold and publish the files to a GitHub Release the app downloads on
 cold start. Free managed Postgres was ruled out by measurement: gold is
 1.9 GB in PG vs 0.5–1 GB free-tier caps (Neon/Supabase/Aiven, checked
@@ -326,7 +334,7 @@ flight_month 2026-04-01. Spot check SEA→LAX Apr 2026: AS/DL/OO/F9/UA load
 factors 66–86% — realistic.
 
 ## Verified state
-Full stack verified end-to-end on this machine 2026-07-03/04:
+Full stack verified end-to-end locally 2026-07-03/04:
 - Colima + docker compose up: init scripts created all schemas/tables on first
   boot. Form-replay loads succeeded for **all four flavors**, `--year latest`
   (2026: months 1–3, matching BTS's ~3-month lag) and `--year prev` (2025:
@@ -334,10 +342,11 @@ Full stack verified end-to-end on this machine 2026-07-03/04:
 - **Historical backfill complete** (2026-07-04): all 4 flavors × 1990–2026,
   no missing years (checked against generate_series), zero failed batches.
   **24.3M rows**: segment 13,877,353 / market 10,391,159. 140 form requests,
-  ~45 s each; 5 transient network failures (laptop sleep stalled the socket),
-  all clean — fetch fails before any DB write — and re-pulled successfully.
-  Lessons baked in: `fetch_from_form` now retries network errors once or
-  twice; run long pulls under `caffeinate -i -w <pid>` so the Mac stays awake.
+  ~45 s each; 5 transient network failures (the machine sleeping stalled the
+  socket), all clean — fetch fails before any DB write — and re-pulled
+  successfully. Lessons baked in: `fetch_from_form` now retries network
+  errors once or twice; run long pulls under `caffeinate -i -w <pid>` (macOS)
+  so the machine stays awake.
 - `replace-years` idempotency: re-running the same load left counts unchanged
   (112,745 → 112,745), batch ledger records both runs.
 - OpenFlights airports loaded 2026-07-04: 7,698 rows (all unique ids, 6,072
@@ -365,9 +374,6 @@ Full stack verified end-to-end on this machine 2026-07-03/04:
 - Gotcha demonstrated: bronze `month` is TEXT, so `max(month)`='9'
   lexicographically. Cast in silver; don't "fix" bronze.
 
-## This machine (as of 2026-07-03)
-arm64 Mac, set up and working: Homebrew, Colima (`colima start` after reboot),
-docker CLI + compose plugin (wired via `cliPluginsExtraDirs` in
-`~/.docker/config.json`), `t100_postgres` container on localhost:5432, venv at
-`.venv/` (system Python 3.9 + psycopg2). No psql on the host — use
-`docker exec t100_postgres psql -U t100 -d t100`.
+## This machine
+Device-specific setup state (exact toolchain versions, local wiring quirks)
+lives in the gitignored `CLAUDE.local.md`, not in this shared file.

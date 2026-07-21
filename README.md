@@ -1,18 +1,22 @@
-# T-100 Postgres warehouse — setup
+# T-100 Postgres warehouse
 
-Medallion-structured Postgres for BTS T-100 traffic data. This is **step 1: the
-database + bronze landing zone**. Ingestion (loading CSVs) is the next step.
+A medallion-structured Postgres warehouse for BTS T-100 U.S. airline traffic
+data (1990–present, ~24M rows), with a Streamlit app for exploring routes,
+hub airports, and carrier mergers. Everything is built end-to-end: ingestion,
+bronze → silver → gold transforms, and a 4-page app that runs either against
+live Postgres locally or, for free public hosting, against static Parquet
+snapshots via DuckDB (see [Hosting](#hosting)).
 
 ## Layout
 
 One database (`t100`), medallion layers as **schemas**:
 
-| schema   | purpose                                            | state now        |
-|----------|----------------------------------------------------|------------------|
-| `bronze` | raw, as-loaded, every column `TEXT`                | tables created   |
+| schema   | purpose                                            | state          |
+|----------|-----------------------------------------------------|---------------|
+| `bronze` | raw, as-loaded, every column `TEXT`                | built          |
 | `silver` | typed / cleaned / conformed + dimensions           | built (matviews) |
-| `gold`   | business-ready aggregates                           | built (matviews) |
-| `meta`   | `ingest_batch` — one row per load, for lineage      | table created    |
+| `gold`   | business-ready aggregates, incl. carrier-family rollups | built (matviews) |
+| `meta`   | `ingest_batch` — one row per load, for lineage      | built          |
 
 ### Why schemas, not separate databases
 Cross-layer SQL stays in one connection, you can transact bronze→silver, and you
@@ -73,6 +77,14 @@ ingest/
   load_t100.py     header-driven, batch-tracked loader
   backfill.sh      one-time historical pull (loop years x flavors)
   requirements.txt
+app/
+  Route_Explorer.py        Streamlit entry point + Route Explorer page
+  pages/2_Hub_Utilization.py, 3_Destinations.py, 4_Carrier_Families.py
+  warehouse.py              shared query layer (Postgres or DuckDB backend)
+export/
+  export_gold.py   gold + dim_carrier_family -> zstd Parquet, for hosting
+notebooks/
+  hub_utilization_eda.ipynb  Jupyter + plotly EDA
 .github/workflows/
   ingest.yml       monthly scheduled run (+ manual trigger)
 ```
@@ -167,7 +179,7 @@ a one-time backfill: loop `--year` over 1990..current.)
 ### Lookups
 The `bronze.l_*` decode tables are two-column `code,description` downloads
 with their own pages on TranStats; finding their Table_IDs and extending
-`SOURCES` covers them. Left out here to keep step 2 focused on the fact tables.
+`SOURCES` covers them.
 
 ### Airport geography
 `bronze.airports` lands OpenFlights `airports.dat` (names, IATA/ICAO codes,
@@ -211,7 +223,46 @@ departure-side counting:
 ## Visualizations
 - **Notebook** (`notebooks/hub_utilization_eda.ipynb`): Jupyter + plotly EDA.
   Launch: `.venv/bin/jupyter lab notebooks/hub_utilization_eda.ipynb`
-- **Streamlit app** (`app/`): interactive Route Explorer (load factors by
-  month on any route) + Hub Utilization pages.
-  Launch: `.venv/bin/streamlit run app/Route_Explorer.py` → localhost:8501.
-  Connection via `$T100_DSN` (defaults to the local Docker Postgres).
+- **Streamlit app** (`app/`), four pages:
+  - **Route Explorer** — load factor, capacity vs. demand, and a share-gap
+    view for any origin/destination pair, by carrier or carrier family.
+  - **Hub Utilization** — hub-weight and fortress-dominance charts + a spoke
+    map, per carrier or family.
+  - **Destinations** — all nonstops from one airport: spoke map, top
+    destinations, best/worst-performing routes, and year-over-year momentum.
+  - **Carrier Families** — merger timelines, member-code seat trends, and
+    route churn (added/dropped city pairs) for the five authored carrier
+    families (AA, DL, UA, WN, AS and their absorbed carriers).
+
+  Run locally against Postgres:
+  ```bash
+  .venv/bin/streamlit run app/Route_Explorer.py   # -> localhost:8501
+  # $T100_DSN selects the database (defaults to the local Docker Postgres)
+  ```
+
+## Hosting
+
+The app also runs with **no live database**, against static Parquet
+snapshots of `gold` via DuckDB — this is what free-tier hosting (e.g.
+Streamlit Community Cloud) uses, since managed free-tier Postgres plans are
+too small for this dataset's gold layer.
+
+```bash
+# after a data refresh + SELECT gold.refresh_all():
+.venv/bin/python export/export_gold.py     # writes export/out/*.parquet (~80 MB, zstd)
+# publish export/out/*.parquet as assets on a GitHub Release
+```
+
+Then point the app at that release:
+```bash
+export T100_BACKEND=duckdb
+export T100_PARQUET_URL=https://github.com/<owner>/<repo>/releases/download/<tag>
+.venv/bin/streamlit run app/Route_Explorer.py
+```
+
+`T100_PARQUET_URL` is fetched lazily — files download into `export/out/`
+(or `$T100_PARQUET_DIR`) the first time each table is queried, then cache
+on disk. On Streamlit Community Cloud, set `T100_BACKEND` and
+`T100_PARQUET_URL` as app secrets; storage resets whenever the app sleeps
+and restarts, so the first request after a wake re-downloads the Parquet
+files (a few seconds, ~80 MB total).

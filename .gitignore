@@ -19,6 +19,9 @@ pgdata/
 # Gold Parquet exports — published via GitHub Releases, not the repo tree
 export/out/
 
+# Machine-specific / personal setup notes — not for the public repo
+CLAUDE.local.md
+
 # Editor
 .vscode/
 .idea/
