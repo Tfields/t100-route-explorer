@@ -1,0 +1,7 @@
+streamlit
+plotly
+pandas
+sqlalchemy
+psycopg2-binary
+duckdb
+duckdb-engine

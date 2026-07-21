@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local env / secrets — never commit
+.env
+*.env
+
+# Downloaded T-100 data (can be large; reproducible from PREZIP)
+*.zip
+*.csv
+data/
+
+# Postgres local volume (if bind-mounted)
+pgdata/
+
+# Gold Parquet exports — published via GitHub Releases, not the repo tree
+export/out/
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Notebooks
+.ipynb_checkpoints/

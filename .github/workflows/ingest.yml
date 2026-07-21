@@ -1,0 +1,48 @@
+name: t100-ingest
+
+# Minimal-triggering automation: runs monthly, plus a manual button.
+# BTS releases T-100 monthly with a ~30-45 day lag, so the 5th catches the
+# latest release. The loader replays the TranStats download form (one year per
+# request); 'replace-years' converges each loaded year to current data,
+# including BTS's back-revisions. Loading latest + prev year covers the lag
+# window around new year (December data lands in Jan-Feb) without catch-up logic.
+on:
+  schedule:
+    - cron: "0 9 5 * *"     # 09:00 UTC on the 5th of each month
+  workflow_dispatch: {}       # run on demand from the Actions tab
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    # NOTE: the runner must be able to reach your Postgres. Fine for a managed/
+    # cloud DB. For a DB on a private network, use a self-hosted runner or swap
+    # this for the cron/systemd-timer approach in the README.
+    env:
+      PGHOST: ${{ secrets.PGHOST }}
+      PGPORT: ${{ secrets.PGPORT }}
+      PGUSER: ${{ secrets.PGUSER }}
+      PGPASSWORD: ${{ secrets.PGPASSWORD }}
+      PGDATABASE: ${{ secrets.PGDATABASE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r ingest/requirements.txt
+
+      - name: Load domestic segment
+        run: |
+          python ingest/load_t100.py domestic_segment --year prev
+          python ingest/load_t100.py domestic_segment --year latest
+      - name: Load domestic market
+        run: |
+          python ingest/load_t100.py domestic_market --year prev
+          python ingest/load_t100.py domestic_market --year latest
+      - name: Load international segment
+        run: |
+          python ingest/load_t100.py international_segment --year prev
+          python ingest/load_t100.py international_segment --year latest
+      - name: Load international market
+        run: |
+          python ingest/load_t100.py international_market --year prev
+          python ingest/load_t100.py international_market --year latest

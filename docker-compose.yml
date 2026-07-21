@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: t100_postgres
+    environment:
+      POSTGRES_DB: t100
+      POSTGRES_USER: t100
+      POSTGRES_PASSWORD: t100   # change me for anything non-local
+    ports:
+      - "5432:5432"
+    volumes:
+      - t100_pgdata:/var/lib/postgresql/data
+      # Scripts here run once, in filename order, on first boot (empty data dir).
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U t100 -d t100"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  t100_pgdata:
