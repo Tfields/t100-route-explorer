@@ -1,5 +1,6 @@
 -- 07_carrier_families.sql
--- Carrier families: stitch merged carriers into continuous histories.
+-- Carrier families: the authored map that stitches merged carriers (and
+-- single-partner regionals) into continuous histories.
 --
 -- silver.dim_carrier_family is AUTHORED reference data (curated here, not
 -- derived from a source download) mapping historical T-100 carrier codes to
@@ -58,78 +59,6 @@ INSERT INTO silver.dim_carrier_family (carrier, family, family_name, merged_mont
  ('XE (1)', 'UA', 'United Airlines family',   NULL, 'regional: ExpressJet (Continental Express, then United Express); a few % of 2007-08 flying was for Delta or own-brand; ended 2011'),
  ('QX',     'AS', 'Alaska Air Group family',  NULL, 'regional: Horizon Air, owned by Alaska Air Group; ~6% of 2004-07 flying was Frontier JetExpress at DEN');
 
--- ===========================================================================
--- family_month: gold.carrier_month, but keyed by family - continuous lines
--- across mergers. Unmapped codes pass through as their own family.
--- ===========================================================================
-CREATE MATERIALIZED VIEW IF NOT EXISTS gold.family_month AS
-SELECT
-    s.flight_month,
-    COALESCE(f.family, s.carrier)                       AS family,
-    MAX(COALESCE(f.family_name, s.carrier_name))        AS family_name,
-    SUM(s.departures_performed)::bigint                 AS departures,
-    SUM(s.seats)::bigint                                AS seats,
-    SUM(s.passengers)::bigint                           AS passengers,
-    ROUND(100.0 * SUM(s.passengers) / NULLIF(SUM(s.seats), 0), 1) AS load_factor_pct,
-    COUNT(DISTINCT s.origin)                            AS airports_served,
-    COUNT(DISTINCT s.origin || '>' || s.dest)           AS routes_served
-FROM silver.fact_segment s
-LEFT JOIN silver.dim_carrier_family f ON f.carrier = s.carrier
-WHERE s.service_class = 'F'
-GROUP BY s.flight_month, COALESCE(f.family, s.carrier);
-
-CREATE INDEX IF NOT EXISTS ix_family_month_family ON gold.family_month (family, flight_month);
-CREATE INDEX IF NOT EXISTS ix_family_month_month  ON gold.family_month (flight_month);
-
--- ===========================================================================
--- airport_family_month: gold.airport_carrier_month, keyed by family, with
--- the share metrics recomputed against family denominators.
--- ===========================================================================
-CREATE MATERIALIZED VIEW IF NOT EXISTS gold.airport_family_month AS
-WITH base AS (
-    SELECT
-        s.flight_month,
-        s.origin                                        AS airport,
-        COALESCE(f.family, s.carrier)                   AS family,
-        MAX(COALESCE(f.family_name, s.carrier_name))    AS family_name,
-        MAX(s.origin_city)                              AS city,
-        MAX(s.origin_state)                             AS state,
-        MAX(s.origin_country)                           AS country,
-        MAX(s.origin_lat)                               AS latitude,
-        MAX(s.origin_lon)                               AS longitude,
-        SUM(s.departures_performed)::bigint             AS departures,
-        SUM(s.seats)::bigint                            AS seats,
-        SUM(s.passengers)::bigint                       AS passengers,
-        COUNT(DISTINCT s.dest)                          AS nonstop_dests
-    FROM silver.fact_segment s
-    LEFT JOIN silver.dim_carrier_family f ON f.carrier = s.carrier
-    WHERE s.service_class = 'F'
-    GROUP BY s.flight_month, s.origin, COALESCE(f.family, s.carrier)
-)
-SELECT
-    base.*,
-    ROUND(100.0 * passengers / NULLIF(seats, 0), 1)     AS load_factor_pct,
-    ROUND(100.0 * seats / NULLIF(SUM(seats) OVER (PARTITION BY flight_month, family), 0), 2)
-                                                        AS pct_of_family_system,
-    ROUND(100.0 * seats / NULLIF(SUM(seats) OVER (PARTITION BY flight_month, airport), 0), 2)
-                                                        AS pct_of_airport_seats
-FROM base;
-
-CREATE INDEX IF NOT EXISTS ix_afm_airport ON gold.airport_family_month (airport, flight_month);
-CREATE INDEX IF NOT EXISTS ix_afm_family  ON gold.airport_family_month (family, flight_month);
-CREATE INDEX IF NOT EXISTS ix_afm_month   ON gold.airport_family_month (flight_month);
-
--- ===========================================================================
--- Supersedes the gold.refresh_all() defined in 06_gold.sql: same entry
--- point, now covering the family views too.
--- ===========================================================================
-CREATE OR REPLACE FUNCTION gold.refresh_all() RETURNS void
-LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM silver.refresh_all();
-    REFRESH MATERIALIZED VIEW gold.carrier_month;
-    REFRESH MATERIALIZED VIEW gold.airport_carrier_month;
-    REFRESH MATERIALIZED VIEW gold.route_carrier_month;
-    REFRESH MATERIALIZED VIEW gold.family_month;
-    REFRESH MATERIALIZED VIEW gold.airport_family_month;
-END $$;
+-- The family-keyed gold views (gold.family_month, gold.airport_family_month)
+-- and gold.refresh_all() live in 08_ontime.sql: they also depend on the
+-- marketing-carrier allocation built there.

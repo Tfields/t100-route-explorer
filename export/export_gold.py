@@ -30,6 +30,7 @@ TABLES = {
     "gold.airport_family_month":  "family, airport, flight_month",
     "gold.route_carrier_month":   "carrier, origin, dest, flight_month",
     "silver.dim_carrier_family":  "family, carrier",
+    "silver.carrier_partner_alloc": "carrier, origin, dest, flight_month, family",
 }
 
 

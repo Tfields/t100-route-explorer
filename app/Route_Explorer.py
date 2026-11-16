@@ -7,8 +7,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from warehouse import (MAP_DOT, MAP_LINE, REGION_PREFIX, REGIONS, TOTAL_LINE,
-                       about_data, carrier_color_map, is_region, month_gaps, month_hover,
+from warehouse import (FAMILY_JOIN, FAMILY_KEY, FAMILY_NAME, FAMILY_W, MAP_DOT,
+                       MAP_LINE, REGION_PREFIX, REGIONS, TOTAL_LINE,
+                       carrier_color_map, is_region, month_gaps, month_hover,
                        month_window, place_name, place_params, place_sql, q,
                        region_label, region_of, roll12, style_map)
 
@@ -20,7 +21,6 @@ st.caption(
     "Nonstop routes touching the U.S. — BTS T-100, scheduled passenger service, "
     f"monthly, 1990 through {latest:%B %Y}."
 )
-about_data()
 
 # A carrier x direction x month needs at least this many performed departures
 # to count as service, unless "Show one-off flights" is ticked. Departures, not
@@ -40,11 +40,15 @@ region_labels = {REGION_PREFIX + name: region_label(name) for name in REGIONS}
 mode = st.radio("View by", ["Carrier code", "Family (merger-adjusted)"],
                 horizontal=True, key="view_mode",
                 help="Family stitches merged carriers (NW→DL, CO→UA, US→AA, "
-                     "VX/HA→AS, ...) into continuous lines; pre-merger values "
-                     "are the pro-forma combined view.")
+                     "VX/HA→AS, ...) and regional partners into continuous "
+                     "lines; pre-merger values are the pro-forma combined "
+                     "view. *Regionals flying for several majors are split "
+                     "by estimate from 2018 - see About the data.")
 FAMILY = mode.startswith("Family")
-KEY = "COALESCE(f.family, r.carrier)" if FAMILY else "r.carrier"
-NAME = "COALESCE(f.family_name, r.carrier_name)" if FAMILY else "r.carrier_name"
+KEY = FAMILY_KEY if FAMILY else "r.carrier"
+NAME = FAMILY_NAME if FAMILY else "r.carrier_name"
+W = FAMILY_W if FAMILY else "1"          # share of the row owed to this family
+JOIN = FAMILY_JOIN if FAMILY else ""
 
 c1, c2, c3 = st.columns([2, 2, 1])
 origin_codes = list(region_labels) + airports.code.tolist()
@@ -82,14 +86,14 @@ show_oneoffs = c3.checkbox(
 
 df = q(f"""
     SELECT r.flight_month, {KEY} AS carrier, MAX({NAME}) AS carrier_name,
-           SUM(r.seats)::float AS seats, SUM(r.passengers)::float AS passengers,
-           SUM(r.departures)::float AS departures,
+           SUM(r.seats * {W})::float AS seats,
+           SUM(r.passengers * {W})::float AS passengers,
+           SUM(r.departures * {W})::float AS departures,
            MAX(r.distance_miles)::float AS distance_miles,
            r.origin, r.dest,
            MAX(r.origin_lat)::float AS o_lat, MAX(r.origin_lon)::float AS o_lon,
            MAX(r.dest_lat)::float AS d_lat, MAX(r.dest_lon)::float AS d_lon
-    FROM gold.route_carrier_month r
-    LEFT JOIN silver.dim_carrier_family f ON f.carrier = r.carrier
+    FROM gold.route_carrier_month r {JOIN}
     WHERE r.origin <> r.dest AND (
           ({place_sql("origin", origin, "o")} AND {place_sql("dest", dest, "d")})
        OR (:b AND {place_sql("origin", dest, "d")} AND {place_sql("dest", origin, "o")}))

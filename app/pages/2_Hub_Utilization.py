@@ -8,7 +8,8 @@ import plotly.graph_objects as go
 import streamlit as st
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
-from warehouse import (MAP_DOT, MAP_LINE, SERIES_COLORS, about_data, clean_name,
+from warehouse import (FAMILY_JOIN, FAMILY_KEY, FAMILY_W, MAP_DOT, MAP_LINE,
+                       SERIES_COLORS, clean_name,
                        label_line_ends, month_gaps, month_hover,
                        month_window, q, roll12, style_map)
 
@@ -17,14 +18,15 @@ st.set_page_config(page_title="T-100 Hub Utilization", page_icon="🛫", layout=
 st.title("🛫 Hub Utilization")
 st.caption("How the major carriers use their hubs, 1990–present. "
            "Scheduled passenger service, departures-side counting.")
-about_data()
 
 # --- mode + airline picker ---------------------------------------------------
 mode = st.radio("View by", ["Family (merger-adjusted)", "Carrier code"],
                 horizontal=True,
                 help="Family stitches merged carriers (NW→DL, CO→UA, US→AA, "
-                     "VX/HA→AS, ...) into continuous lines; pre-merger values "
-                     "are the pro-forma combined view.")
+                     "VX/HA→AS, ...) and regional partners into continuous "
+                     "lines; pre-merger values are the pro-forma combined "
+                     "view. *Regionals flying for several majors are split "
+                     "by estimate from 2018 - see About the data.")
 FAMILY = mode.startswith("Family")
 ACM = "gold.airport_family_month" if FAMILY else "gold.airport_carrier_month"
 KEY = "family" if FAMILY else "carrier"
@@ -101,9 +103,8 @@ s1, s2 = st.columns([1, 3])
 hub = s1.selectbox("Hub", hubs)
 months = q(f"""
     SELECT DISTINCT r.flight_month
-    FROM gold.route_carrier_month r
-    LEFT JOIN silver.dim_carrier_family f ON f.carrier = r.carrier
-    WHERE {'COALESCE(f.family, r.carrier)' if FAMILY else 'r.carrier'} = :k
+    FROM gold.route_carrier_month r {FAMILY_JOIN if FAMILY else ''}
+    WHERE {FAMILY_KEY if FAMILY else 'r.carrier'} = :k
       AND r.origin = :h
     ORDER BY 1""", k=airline, h=hub).flight_month.tolist()
 months = [m for m in months if w0 <= m <= w1] or months
@@ -114,10 +115,9 @@ routes = q(f"""
     SELECT r.dest, MAX(r.dest_city) AS dest_city,
            MAX(r.dest_lat)::float AS d_lat, MAX(r.dest_lon)::float AS d_lon,
            MAX(r.origin_lat)::float AS o_lat, MAX(r.origin_lon)::float AS o_lon,
-           SUM(r.seats)::float AS seats
-    FROM gold.route_carrier_month r
-    LEFT JOIN silver.dim_carrier_family f ON f.carrier = r.carrier
-    WHERE {'COALESCE(f.family, r.carrier)' if FAMILY else 'r.carrier'} = :k
+           SUM(r.seats * {FAMILY_W if FAMILY else '1'})::float AS seats
+    FROM gold.route_carrier_month r {FAMILY_JOIN if FAMILY else ''}
+    WHERE {FAMILY_KEY if FAMILY else 'r.carrier'} = :k
       AND r.origin = :h AND r.flight_month = :m AND r.dest_lat IS NOT NULL
     GROUP BY r.dest ORDER BY seats DESC""", k=airline, h=hub, m=month)
 

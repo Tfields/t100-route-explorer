@@ -33,8 +33,11 @@ init/04_geo.sql             bronze.airports (OpenFlights geographic reference)
 init/05_silver.sql          silver matviews: dim_airport, fact_segment, fact_market
 init/06_gold.sql            gold matviews: carrier_month, airport_carrier_month,
                             route_carrier_month (+ gold.refresh_all())
-init/07_carrier_families.sql silver.dim_carrier_family (authored merger map) +
-                            gold.family_month, gold.airport_family_month
+init/07_carrier_families.sql silver.dim_carrier_family (authored family map)
+init/08_ontime.sql          bronze.ontime_marketing, silver.ontime_partner,
+                            silver.carrier_partner_alloc, gold.family_month,
+                            gold.airport_family_month, gold.refresh_all()
+ingest/load_ontime.py       on-time marketing-carrier loader (aggregates at ingest)
 ingest/load_t100.py         header-driven, batch-tracked loader
 ingest/backfill.sh          one-time historical pull (loop years x flavors)
 ingest/requirements.txt
@@ -132,7 +135,7 @@ docker exec t100_postgres psql -U t100 -d t100 -c "SELECT gold.refresh_all();"
    GitHub Actions workflow was deleted (it couldn't reach the laptop-local DB
    and failed every month Aug–Oct 2026), and launchd/cron was declined. Run the
    four flavors × `--year prev` + `--year latest` by hand, then
-   `SELECT gold.refresh_all();` (~6 min), then re-export + new Release for the
+   `SELECT gold.refresh_all();` (~6 min before on-time; see ON-TIME timing), then re-export + new Release for the
    hosted app. Last catch-up 2026-11-02 (batches 243–250, data through
    2026-07).
 2. **Remaining unwired lookups** (low value): `l_carrier` (carrier names come
@@ -196,8 +199,76 @@ CO→UA 2012, US→AA 2015) — real events, not bugs.
   69.5→88.5%, AA@DFW 66.0→79.3%, DL@ATL 73.4→77.4%, AS@SEA 44.8→50.2%.
   Most regionals only start reporting T-100 in Oct 2002, so family lines
   step up that month. Carrier Families orders members survivor → merged →
-  regional. Local PG + export/out are rebuilt; a new Release is needed
-  before the hosted app sees it.
+  regional. Published as Release `gold-2026-07-r2` (2026-11-15, 6 assets,
+  82.3 MB, marked latest); hosted app needs a Reboot to re-download.
+
+## ON-TIME ENRICHMENT (built 2026-11-15 — init/08_ontime.sql, ingest/load_ontime.py)
+Attributes multi-partner regionals (OO, YX, YV, G7, ZW, EV, ...) to the
+major that SOLD each flight, 2018+. Decided with Thomas: aggregate at
+ingest, split shared routes by departure share, flag estimates, no tail
+data, FAA registry rejected (below).
+- **Source** (verified live): TranStats **Table_ID 237** "Marketing Carrier
+  On-Time Performance (Beginning January 2018)", On-Time database
+  (`gnoyr_VQ=FGK`, `QO_fu146_anzr=b0-gvzr`). Same form replay as T-100
+  (`fetch_from_form(..., db_qs=)`), but **one MONTH per request**. Flight-
+  level, ~665K rows/month; **prezipped download ignores field selection**
+  (always 119 columns, ~35 MB zip / ~330 MB CSV, ~1 min per month). CSV
+  headers differ from the form's field names: `Marketing_Airline_Network`,
+  `Operating_Airline` (same codes as T-100 carrier), `Origin`, `Dest`,
+  `Cancelled`, `Duplicate`. Runs one month ahead of T-100.
+- **bronze.ontime_marketing** — the ONE deliberate exception to "bronze is
+  raw": `load_ontime.py` streams the CSV, counts flights per year × month ×
+  marketing × operating × origin × dest (~11K rows/month) and discards the
+  flights. Columns still TEXT. Month reload = delete + insert; batches in
+  `meta.ingest_batch` (target `bronze.ontime_marketing`).
+  `load_ontime.py --year Y --month M | --from YYYY-MM --to YYYY-MM | --file`.
+- **silver.ontime_partner** (typed, performed = flights − cancelled) and
+  **silver.carrier_partner_alloc** (flight_month, carrier, origin, dest,
+  family, family_name, share, estimated, match_level): one row per family
+  for every T-100 route-month of a split carrier. Split carriers = operating
+  carriers seen with a different marketing carrier AND not in
+  dim_carrier_family. match_level 1 route / 2 reverse route / 3 origin
+  airport / 4 dest airport / 5 carrier-month (fallbacks cover international
+  and unmatched T-100 routes). `estimated` = more than one family on the
+  route-month. Shares sum to 1.
+- **Gold family views moved from 07 to 08** and now weight by the
+  allocation: family = COALESCE(alloc.family, dim.family, carrier); new
+  column `seats_estimated`. Totals equal the carrier views to within
+  rounding (no longer exact). `gold.refresh_all()` (now defined in 08) also
+  refreshes the two on-time silver views. A DB built before 08 needs a
+  one-time `DROP MATERIALIZED VIEW gold.family_month,
+  gold.airport_family_month` before running 08.
+- **App**: route-level family queries use `warehouse.FAMILY_JOIN /
+  FAMILY_KEY / FAMILY_NAME / FAMILY_W` (multiply additive measures by the
+  share). Carrier Families shows the allocated seats as a grey
+  "Shared regionals*" band (family total − member codes). The About page
+  explains the estimate and prints each family's estimated-seat share live.
+  `carrier_partner_alloc` is exported as a 7th Parquet file — **the hosted
+  app needs the new Release BEFORE the code is pushed**, or it 404s on it.
+- **Known wart:** family lines step up in Jan 2018 (attribution starts);
+  pre-2018 the multi-partner regionals stay under their own codes.
+- **Monthly refresh now also runs** `load_ontime.py` for the new month(s)
+  before `gold.refresh_all()`.
+- **Backfill complete 2026-11-16**: all 104 months 2018-01..2026-08, no
+  failures (a TranStats outage mid-run is why the loader retries with
+  30s→10min waits and has `--skip-loaded`). Validation: shares sum to 1 every
+  year (max err 1e-6); family vs carrier seat totals equal within ±4 seats/yr;
+  estimated seats 1.3–2.2% of all seats per year, 2.6–4.0% of AA/AS/DL/UA
+  family seats (latest 12 mo); Mar-2026 hub shares UA@ORD 47.6, UA@DEN 49.9,
+  DL@SLC 65.8, DL@MSP 70.7, AA@DFW 82.9, AS@SEA 53.8%.
+- **Gotcha — stale matview stats:** the first full `refresh_all()` after the
+  backfill took 4.5 h (stats on carrier_partner_alloc were from when ~13
+  months were loaded → nested-loop plans). refresh_all now ANALYZEs
+  fact_segment, ontime_partner and carrier_partner_alloc after refreshing.
+  With that, a full refresh_all() = 25.5 min (silver base ~22 min, on-time
+  views ~13 s, gold ~3 min).
+- Scouting numbers (Mar 2025): on-time vs T-100 performed departures agree
+  within ~0.3% for regionals. Shared-route departures: 18% of OO, 48% of YX.
+  Every tail flew for exactly one partner. **FAA registry (tail → model)
+  scouted and REJECTED:** matched 100% of tails but every partner flies
+  E175s, so it only cut the blurry share 18→12.5% (OO) and 48→43.5% (YX),
+  and load factors by aircraft type on shared routes differ by only
+  ~1.4–2.2 pp.
 
 ## STREAMLIT APP (app/)
 Four pages (shared `month_window()` helper in warehouse.py: month-range
@@ -300,8 +371,9 @@ Uzbekistan in Middle East for lack of a better home.
 Queries go through `place_sql()` / `place_params()`. Region mode shows an
 airport-pair count + seat-weighted distance and maps the heaviest 150 pairs.
 The one-off floor still applies per airport pair. Not yet on other pages.
-**About the data (2026-11-15):** `warehouse.about_data()` renders a
-collapsed expander under the title on all four pages — source, segment-vs-
+**About the data (2026-11-15):** its own fifth page,
+`app/pages/5_About_the_Data.py` (Thomas preferred a separate tab over a
+per-page expander), body rendered by `warehouse.about_data()` — source, segment-vs-
 journey caveat, load factor definition, operating-carrier reporting, family
 membership (read live from dim_carrier_family), the unattributed
 multi-partner regionals, the Oct 2002 regional reporting step, and the

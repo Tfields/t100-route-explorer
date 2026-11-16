@@ -72,17 +72,23 @@ init/
   04_geo.sql       bronze.airports (OpenFlights geographic reference)
   05_silver.sql    silver matviews: dim_airport, fact_segment, fact_market
   06_gold.sql      gold matviews: carrier/airport-carrier/route-carrier month
-  07_carrier_families.sql  merger map (dim) + family-keyed gold views
+  07_carrier_families.sql  authored family map (mergers + single-partner regionals)
+  08_ontime.sql            marketing-carrier split for multi-partner regionals
+                           (on-time data) + family-keyed gold views
 ingest/
   load_t100.py     header-driven, batch-tracked loader
+  load_ontime.py   on-time marketing-carrier loader (one month per request,
+                   aggregated at ingest)
   backfill.sh      one-time historical pull (loop years x flavors)
   requirements.txt
 app/
   Route_Explorer.py        Streamlit entry point + Route Explorer page
-  pages/2_Hub_Utilization.py, 3_Destinations.py, 4_Carrier_Families.py
+  pages/2_Hub_Utilization.py, 3_Destinations.py, 4_Carrier_Families.py,
+        5_About_the_Data.py
   warehouse.py              shared query layer (Postgres or DuckDB backend)
 export/
-  export_gold.py   gold + dim_carrier_family -> zstd Parquet, for hosting
+  export_gold.py   gold + dim_carrier_family + carrier_partner_alloc -> zstd
+                   Parquet, for hosting
 notebooks/
   hub_utilization_eda.ipynb  Jupyter + plotly EDA
 ```
@@ -217,8 +223,10 @@ departure-side counting:
   Southwest, Virgin America/Hawaiian→Alaska; plus single-partner
   regionals such as Envoy/PSA/Piedmont→American, Endeavor→Delta,
   CommuteAir→United, Horizon→Alaska — multi-partner regionals like SkyWest
-  and Republic stay separate, since T-100 reports by operating carrier and
-  can't attribute them), for continuous trend lines
+  and Republic are split between the majors they flew for using BTS
+  Marketing Carrier On-Time Performance data, 2018 onward — an estimate
+  where one regional flew the same route for two majors), for continuous
+  trend lines
   across mergers. Pre-merger values are pro-forma combined.
 
 ## Visualizations

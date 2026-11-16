@@ -102,13 +102,15 @@ def _vq_encode(s: str) -> str:
 
 
 def fetch_from_form(table_id: int, year: str = "latest", month: str = None,
-                    timeout: int = 600, retries: int = 2) -> tuple[str, bytes]:
+                    timeout: int = 600, retries: int = 2,
+                    db_qs: str = None) -> tuple[str, bytes]:
     """Replay the TranStats download form; return (label, raw zip bytes).
     Retries the whole GET+POST on network errors (stalled reads happen, e.g.
     around laptop sleep); server-side errors (bad year, layout change) don't."""
     for attempt in range(retries + 1):
         try:
-            return _fetch_from_form_once(table_id, year, month, timeout)
+            return _fetch_from_form_once(table_id, year, month, timeout,
+                                         db_qs or DB_NAME_QS)
         except OSError as e:   # socket.timeout, URLError, ConnectionError, ...
             if attempt == retries:
                 raise
@@ -116,8 +118,8 @@ def fetch_from_form(table_id: int, year: str = "latest", month: str = None,
                   file=sys.stderr)
 
 
-def _fetch_from_form_once(table_id, year, month, timeout) -> tuple[str, bytes]:
-    url = f"{DL_FORM}?gnoyr_VQ={_vq_encode(str(table_id)).upper()}&{DB_NAME_QS}"
+def _fetch_from_form_once(table_id, year, month, timeout, db_qs=DB_NAME_QS) -> tuple[str, bytes]:
+    url = f"{DL_FORM}?gnoyr_VQ={_vq_encode(str(table_id)).upper()}&{db_qs}"
     opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
     html = opener.open(Request(url, headers=_UA), timeout=timeout).read().decode("utf-8", "replace")
 

@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
-from warehouse import (MAP_DOT, MAP_LINE, about_data, carrier_color_map, month_gaps,
+from warehouse import (MAP_DOT, MAP_LINE, carrier_color_map, month_gaps,
                        month_hover, month_window, q, style_map)
 
 st.set_page_config(page_title="T-100 Destinations", page_icon="🌐", layout="wide")
@@ -16,7 +16,6 @@ st.set_page_config(page_title="T-100 Destinations", page_icon="🌐", layout="wi
 st.title("🌐 Destinations")
 st.caption("Every nonstop destination served from an airport — BTS T-100, "
            "scheduled passenger service, departures side.")
-about_data()
 
 # --- pickers -----------------------------------------------------------------
 airports = q("""

@@ -7,7 +7,8 @@ import plotly.express as px
 import streamlit as st
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
-from warehouse import CARRIER_COLORS, about_data, month_gaps, month_window, q, roll12
+from warehouse import (CARRIER_COLORS, FAMILY_JOIN, FAMILY_KEY, FAMILY_W,
+                       month_gaps, month_window, q, roll12)
 
 st.set_page_config(page_title="T-100 Carrier Families", page_icon="🧬", layout="wide")
 
@@ -15,7 +16,6 @@ st.title("🧬 Carrier Families")
 st.caption("How the five merged airline families came together, and how their "
            "networks change today. Scheduled passenger service, 1990–present; "
            "routes are undirected city pairs.")
-about_data()
 
 # --- family picker -----------------------------------------------------------
 fams = q("""
@@ -98,6 +98,20 @@ st.subheader("Merger history")
 g1, g2 = st.columns(2)
 
 area = cm.copy()
+# Seats the family gets from regionals that fly for several majors (SkyWest,
+# Republic, ...; attributed from the on-time data, 2018+) belong to no member
+# code, so show them as their own band: family total minus the member codes.
+PARTNERS = "Shared regionals*"
+resid = (fm.set_index("flight_month").seats
+         - cm.groupby("flight_month").seats.sum()).fillna(0).clip(lower=0)
+if resid.max() > 1000:
+    area = pd.concat([area, pd.DataFrame({
+        "flight_month": resid.index, "carrier": PARTNERS,
+        "carrier_name": "SkyWest, Republic and other multi-partner regionals "
+                        "(allocated; see About the data)",
+        "seats": resid.values})], ignore_index=True)
+    member_order = member_order + [PARTNERS]
+    fam_colors[PARTNERS] = "#8A8F98"
 ycol = "seats"
 if smooth:
     area = roll12(area, "carrier", "seats").dropna(subset=["seats_12m"])
@@ -156,15 +170,14 @@ st.caption("A route is **added** the first month the family serves the city "
 floor = st.slider("Min seats/month on the city pair (both directions)",
                   0, 3000, 500, step=100)
 
-churn = q("""
+churn = q(f"""
     WITH rm AS (
         SELECT LEAST(r.origin, r.dest) AS a, GREATEST(r.origin, r.dest) AS b,
-               r.flight_month, SUM(r.seats) AS seats
-        FROM gold.route_carrier_month r
-        LEFT JOIN silver.dim_carrier_family f ON f.carrier = r.carrier
-        WHERE COALESCE(f.family, r.carrier) = :fam AND r.origin <> r.dest
+               r.flight_month, SUM(r.seats * {FAMILY_W}) AS seats
+        FROM gold.route_carrier_month r {FAMILY_JOIN}
+        WHERE {FAMILY_KEY} = :fam AND r.origin <> r.dest
         GROUP BY 1, 2, r.flight_month
-        HAVING SUM(r.seats) >= :floor
+        HAVING SUM(r.seats * {FAMILY_W}) >= :floor
     ),
     g AS (
         SELECT flight_month,
@@ -205,7 +218,7 @@ if w1.year >= latest.year:
 # --- recent adds & exits, in detail ------------------------------------------
 st.subheader(f"Recent moves — 12 months to {w1:%b %Y} vs the year before")
 cut12, cut24 = w1 - pd.DateOffset(months=12), w1 - pd.DateOffset(months=24)
-rec = q("""
+rec = q(f"""
     SELECT LEAST(r.origin, r.dest) AS a, GREATEST(r.origin, r.dest) AS b,
            MAX(CASE WHEN r.origin < r.dest THEN r.origin_city
                     ELSE r.dest_city END)   AS a_city,
@@ -214,11 +227,11 @@ rec = q("""
            CASE WHEN r.flight_month > :c12 THEN 'latest' ELSE 'prior' END
                AS period,
            COUNT(DISTINCT r.flight_month) AS months,
-           SUM(r.seats)::float AS seats, SUM(r.passengers)::float AS passengers,
+           SUM(r.seats * {FAMILY_W})::float AS seats,
+           SUM(r.passengers * {FAMILY_W})::float AS passengers,
            STRING_AGG(DISTINCT r.carrier, ', ') AS carriers
-    FROM gold.route_carrier_month r
-    LEFT JOIN silver.dim_carrier_family f ON f.carrier = r.carrier
-    WHERE COALESCE(f.family, r.carrier) = :fam AND r.origin <> r.dest
+    FROM gold.route_carrier_month r {FAMILY_JOIN}
+    WHERE {FAMILY_KEY} = :fam AND r.origin <> r.dest
       AND r.flight_month > :c24 AND r.flight_month <= :w1
     GROUP BY 1, 2, 5""", fam=fam, c12=cut12, c24=cut24, w1=w1)
 

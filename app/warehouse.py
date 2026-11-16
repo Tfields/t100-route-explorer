@@ -28,7 +28,7 @@ DSN = os.environ.get("T100_DSN", "postgresql+psycopg2://t100:t100@localhost:5432
 DUCKDB_TABLES = {
     "gold": ["carrier_month", "family_month", "airport_carrier_month",
              "airport_family_month", "route_carrier_month"],
-    "silver": ["dim_carrier_family"],
+    "silver": ["dim_carrier_family", "carrier_partner_alloc"],
 }
 PARQUET_URL = os.environ.get("T100_PARQUET_URL")  # e.g. a GitHub Release base URL
 PARQUET_DIR = pathlib.Path(os.environ.get(
@@ -172,14 +172,31 @@ def style_map(fig, fit=False):
     return fig
 
 
+# --- family attribution on route-level queries ---------------------------------
+# gold.route_carrier_month is keyed by OPERATING carrier. In Family view a
+# route row belongs to: the marketing-carrier allocation where one exists
+# (multi-partner regionals such as SkyWest, 2018+; one row per family with a
+# share), else the authored family map, else the carrier itself. Queries over
+# `gold.route_carrier_month r` add FAMILY_JOIN, key on FAMILY_KEY and multiply
+# every additive measure by FAMILY_W.
+FAMILY_JOIN = """
+    LEFT JOIN silver.carrier_partner_alloc a
+           ON a.flight_month = r.flight_month AND a.carrier = r.carrier
+          AND a.origin = r.origin AND a.dest = r.dest
+    LEFT JOIN silver.dim_carrier_family f ON f.carrier = r.carrier"""
+FAMILY_KEY = "COALESCE(a.family, f.family, r.carrier)"
+FAMILY_NAME = "COALESCE(a.family_name, f.family_name, r.carrier_name)"
+FAMILY_W = "COALESCE(a.share, 1)"
+
+
 # --- "About the data" ---------------------------------------------------------
 REPO_URL = "https://github.com/Tfields/t100-route-explorer"
 
 
 def about_data():
-    """Collapsed 'About the data' note, shown under the title on every page.
-    The family lists are read from dim_carrier_family so they can't drift
-    from what the charts actually use."""
+    """Body of the 'About the data' page (pages/5_About_the_Data.py). The
+    family lists are read from dim_carrier_family so they can't drift from
+    what the charts actually use."""
     latest = q("SELECT MAX(flight_month) AS m FROM gold.carrier_month").m[0]
     dim = q("""SELECT carrier, family, family_name, merged_month, note
                FROM silver.dim_carrier_family ORDER BY family, carrier""")
@@ -200,11 +217,29 @@ def about_data():
             line += ("; " if len(merged) else " — ") + "regional partners: " \
                     + ", ".join(member(r) for r in regional.itertuples())
         fam_lines.append(line)
+    # Live figures for the estimate note: which regionals are split, and how
+    # much of each family's recent seats rest on an estimated split.
+    split = q("""
+        SELECT c.carrier, MAX(c.carrier_name) AS carrier_name
+        FROM gold.carrier_month c
+        WHERE c.carrier IN (SELECT DISTINCT carrier FROM silver.carrier_partner_alloc)
+          AND c.flight_month >= '2018-01-01'
+        GROUP BY c.carrier ORDER BY SUM(c.seats) DESC""")
+    split_names = ", ".join(split.carrier_name.str.replace(
+        r"\s+(d/b/a|dba)\s.*$", "", regex=True).map(clean_name).head(6))
+    est = q("""
+        SELECT family, MAX(family_name) AS family_name,
+               100.0 * SUM(seats_estimated) / SUM(seats) AS pct
+        FROM gold.family_month
+        WHERE flight_month > :cut GROUP BY family
+        HAVING SUM(seats_estimated) > 0 ORDER BY SUM(seats) DESC""",
+        cut=latest - pd.DateOffset(months=12))
+    est_text = ", ".join(f"{r.family_name.replace(' family', '')} {r.pct:.1f}%"
+                         for r in est.itertuples())
     region_lines = [
         f"- **{name}**: " + ", ".join(d["states"]) for name, d in REGIONS.items()
         if "countries" not in d]
-    with st.expander("About the data"):
-        st.markdown(f"""
+    st.markdown(f"""
 **Source.** U.S. Bureau of Transportation Statistics **T-100 segment data**:
 the monthly traffic reports airlines file with the U.S. DOT. Every domestic
 flight by U.S. carriers and every international flight touching the U.S. by
@@ -229,22 +264,45 @@ independent project, not affiliated with BTS or any airline.
   sections) is not shown as serving it unless you tick "Show one-off flights".
 
 **Airlines are the operating carrier.** T-100 is filed by the airline that
-flew the aircraft, not the one that sold the ticket. A SkyWest flight sold as
-United Express appears under SkyWest.
+flew the aircraft, not the one that sold the ticket. In "Carrier code" view a
+SkyWest flight sold as United Express appears under SkyWest.
 
 **Family view** stitches airlines into continuous histories:
 {chr(10).join(fam_lines)}
 
 - Before a merger, a family's numbers are the then-separate airlines added
   together, not what one airline actually flew.
-- Regional partners are included only where they flew for one family
-  throughout their T-100 history.
-- **SkyWest, Republic, Mesa and other regionals that fly for several majors
-  are not attributed to anyone**, because T-100 cannot say which major a
-  flight was for. A major's share of a hub is therefore understated wherever
-  those regionals operate (United at Chicago O'Hare, for example).
-- Most regional airlines only began filing T-100 in October 2002, so family
-  totals step up that month. That is a reporting change, not growth.
+- The regional partners listed above flew for one family throughout their
+  T-100 history, so all of their traffic counts toward it.
+- Regionals that fly for several majors ({split_names}) are attributed to
+  the major that sold each flight, from January 2018. See the note below.\*
+- Two steps in the family lines are reporting changes, not growth: October
+  2002, when most regional airlines began filing T-100, and January 2018,
+  when the multi-partner regionals start being attributed. Before 2018 those
+  regionals stay under their own codes, so a major's share of a hub is
+  understated for those years wherever they operated.
+
+**\* How multi-partner regionals are split, and where it is an estimate.**
+T-100 does not record which major a regional's flight was for. A second BTS
+dataset, Marketing Carrier On-Time Performance, lists every domestic flight
+since January 2018 with both the airline that sold it and the airline that
+flew it. For each regional, route and month we count its flights for each
+major and divide the T-100 seats, passengers and departures in those
+proportions.
+- **Exact** where a regional flew a route for only one major that month,
+  which is most of its flying.
+- **Estimated** where it flew the same route for two or more majors in the
+  same month. The split by number of flights assumes each major's flights
+  used the same size of aircraft and were equally full. Neither is
+  guaranteed: the same aircraft type is fitted with different seat counts
+  for different majors, and one major's flights can fill better than
+  another's. Treat a family's seats and load factor on such routes as
+  approximate.
+- **Flights outside the on-time data** (it is domestic only, so regional
+  flights to Canada or Mexico, plus a few unmatched routes) take the
+  regional's mix of majors at the U.S. airport that month.
+- Over the latest 12 months, the estimated portion of each family's seats is:
+  {est_text or "none"}. Everything else is reported or exactly attributed.
 
 **Regions** on Route Explorer are groupings made for this app, not an
 official standard. Foreign regions are groups of countries; U.S. regions are
