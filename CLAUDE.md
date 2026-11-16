@@ -262,6 +262,9 @@ data, FAA registry rejected (below).
   fact_segment, ontime_partner and carrier_partner_alloc after refreshing.
   With that, a full refresh_all() = 25.5 min (silver base ~22 min, on-time
   views ~13 s, gold ~3 min).
+- **Published as Release `gold-2026-08-r3`** (2026-11-16, 7 assets, 82.9 MB,
+  marked latest; "2026-08" = on-time end month, T-100 still through 2026-07).
+  Hosted app needs a Reboot to re-download.
 - Scouting numbers (Mar 2025): on-time vs T-100 performed departures agree
   within ~0.3% for regionals. Shared-route departures: 18% of OO, 48% of YX.
   Every tail flew for exactly one partner. **FAA registry (tail → model)
