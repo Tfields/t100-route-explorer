@@ -7,7 +7,7 @@ import plotly.express as px
 import streamlit as st
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
-from warehouse import CARRIER_COLORS, month_gaps, month_window, q, roll12
+from warehouse import CARRIER_COLORS, about_data, month_gaps, month_window, q, roll12
 
 st.set_page_config(page_title="T-100 Carrier Families", page_icon="🧬", layout="wide")
 
@@ -15,13 +15,14 @@ st.title("🧬 Carrier Families")
 st.caption("How the five merged airline families came together, and how their "
            "networks change today. Scheduled passenger service, 1990–present; "
            "routes are undirected city pairs.")
+about_data()
 
 # --- family picker -----------------------------------------------------------
 fams = q("""
     SELECT f.family,
            MAX(f.family_name) AS family_name,
            STRING_AGG(f.carrier, ' + '
-                      ORDER BY f.merged_month NULLS FIRST, f.carrier)
+                      ORDER BY (CASE WHEN f.carrier = f.family THEN 0 WHEN f.note LIKE 'regional%' THEN 2 ELSE 1 END), f.merged_month, f.carrier)
                AS members
     FROM silver.dim_carrier_family f
     GROUP BY f.family
@@ -36,8 +37,9 @@ c1, c2, c3 = st.columns([2, 2, 1])
 fam = c1.selectbox("Family", fams.family, format_func=lambda f: fam_label[f])
 
 mem = q("""
-    SELECT carrier, merged_month, note FROM silver.dim_carrier_family
-    WHERE family = :f ORDER BY merged_month NULLS FIRST, carrier""", f=fam)
+    SELECT f.carrier, f.merged_month, f.note FROM silver.dim_carrier_family f
+    WHERE f.family = :f
+    ORDER BY (CASE WHEN f.carrier = f.family THEN 0 WHEN f.note LIKE 'regional%' THEN 2 ELSE 1 END), f.merged_month, f.carrier""", f=fam)
 member_order = mem.carrier.tolist()
 fam_colors = {c: CARRIER_COLORS[c] for c in member_order if c in CARRIER_COLORS}
 

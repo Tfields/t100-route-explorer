@@ -172,6 +172,215 @@ def style_map(fig, fit=False):
     return fig
 
 
+# --- "About the data" ---------------------------------------------------------
+REPO_URL = "https://github.com/Tfields/t100-route-explorer"
+
+
+def about_data():
+    """Collapsed 'About the data' note, shown under the title on every page.
+    The family lists are read from dim_carrier_family so they can't drift
+    from what the charts actually use."""
+    latest = q("SELECT MAX(flight_month) AS m FROM gold.carrier_month").m[0]
+    dim = q("""SELECT carrier, family, family_name, merged_month, note
+               FROM silver.dim_carrier_family ORDER BY family, carrier""")
+    # "TWA, acquired by..." / "regional: Envoy Air (American Eagle), owned..."
+    # -> "TWA (TW)" / "Envoy Air (MQ)"
+    def member(r):
+        name = re.sub(r"^regional:\s*", "", r.note)
+        name = re.split(r"[,;]", re.sub(r"\s*\([^)]*\)", "", name))[0].strip()
+        return f"{name} ({r.carrier})"
+    fam_lines = []
+    for fam, g in dim.groupby("family", sort=False):
+        merged = g[(g.carrier != fam) & ~g.note.str.startswith("regional")]
+        regional = g[g.note.str.startswith("regional")]
+        line = f"- **{g.family_name.iloc[0].replace(' family', '')} ({fam})**"
+        if len(merged):
+            line += " — merged carriers: " + ", ".join(member(r) for r in merged.itertuples())
+        if len(regional):
+            line += ("; " if len(merged) else " — ") + "regional partners: " \
+                    + ", ".join(member(r) for r in regional.itertuples())
+        fam_lines.append(line)
+    region_lines = [
+        f"- **{name}**: " + ", ".join(d["states"]) for name, d in REGIONS.items()
+        if "countries" not in d]
+    with st.expander("About the data"):
+        st.markdown(f"""
+**Source.** U.S. Bureau of Transportation Statistics **T-100 segment data**:
+the monthly traffic reports airlines file with the U.S. DOT. Every domestic
+flight by U.S. carriers and every international flight touching the U.S. by
+any carrier, January 1990 through **{latest:%B %Y}**. BTS publishes three to
+four months behind. Airport coordinates are from OpenFlights. This is an
+independent project, not affiliated with BTS or any airline.
+[Source code and pipeline]({REPO_URL}).
+
+**What is counted**
+- **Nonstop segments, not passenger journeys.** A passenger connecting
+  through a hub is counted once on each flight. Nothing here says where a
+  trip began or ended, so a drop on one route can be travelers switching to
+  a different routing.
+- **Scheduled passenger service only.** Charters and all-cargo flights are
+  excluded. Seats and departures are flights actually performed.
+- **Load factor** is passengers divided by seats on the same flights. It is
+  not the revenue-passenger-mile load factor airlines publish, though the
+  two track closely on a single route.
+- **Airport figures are departures.** Arrivals mirror them.
+- **One-off flights are hidden by default** on Route Explorer: an airline
+  with two or fewer departures on a route in a month (diversions, extra
+  sections) is not shown as serving it unless you tick "Show one-off flights".
+
+**Airlines are the operating carrier.** T-100 is filed by the airline that
+flew the aircraft, not the one that sold the ticket. A SkyWest flight sold as
+United Express appears under SkyWest.
+
+**Family view** stitches airlines into continuous histories:
+{chr(10).join(fam_lines)}
+
+- Before a merger, a family's numbers are the then-separate airlines added
+  together, not what one airline actually flew.
+- Regional partners are included only where they flew for one family
+  throughout their T-100 history.
+- **SkyWest, Republic, Mesa and other regionals that fly for several majors
+  are not attributed to anyone**, because T-100 cannot say which major a
+  flight was for. A major's share of a hub is therefore understated wherever
+  those regionals operate (United at Chicago O'Hare, for example).
+- Most regional airlines only began filing T-100 in October 2002, so family
+  totals step up that month. That is a reporting change, not growth.
+
+**Regions** on Route Explorer are groupings made for this app, not an
+official standard. Foreign regions are groups of countries; U.S. regions are
+groups of states:
+{chr(10).join(region_lines)}
+""")
+
+
+# --- airport regions ----------------------------------------------------------
+# AUTHORED groups, so a "route" can be region-to-region (West Coast <-> Hawaii,
+# Northeast <-> Europe). US regions are groups of states: the four Census
+# regions as a base, split the way airline network people talk (Hawaii,
+# Alaska, Texas, Florida alone; coast vs mountain; a Mid-Atlantic). The state
+# comes from the BTS city name ("Honolulu, HI"). Foreign regions are groups of
+# countries, matched on the country column; historical names (West Germany,
+# U.S.S.R.) are mapped too. Every state and every country in the data is in
+# exactly one region.
+REGIONS = {
+    "West Coast": {"states": ["CA", "OR", "WA"]},
+    "Hawaii": {"states": ["HI"]},
+    "Alaska": {"states": ["AK"]},
+    "Mountain West": {"states": ["AZ", "CO", "ID", "MT", "NM", "NV", "UT", "WY"]},
+    "Texas": {"states": ["TX"]},
+    "Midwest": {"states": ["IA", "IL", "IN", "KS", "MI", "MN", "MO", "ND", "NE",
+                           "OH", "SD", "WI"]},
+    "Southeast": {"states": ["AL", "AR", "GA", "KY", "LA", "MS", "NC", "OK", "SC",
+                             "TN"]},
+    "Florida": {"states": ["FL"]},
+    "Mid-Atlantic": {"states": ["DC", "DE", "MD", "VA", "WV"]},
+    "Northeast": {"states": ["CT", "MA", "ME", "NH", "NJ", "NY", "PA", "RI", "VT"]},
+    "Pacific territories": {
+        "states": ["TT"],   # BTS code for Guam, N. Marianas, American Samoa
+        "countries": ["Johnston Atoll", "Midway Islands", "Wake Island"]},
+    "Canada": {"countries": ["Canada"]},
+    "Mexico": {"countries": ["Mexico"]},
+    "Central America": {"countries": [
+        "Belize", "Costa Rica", "El Salvador", "Guatemala", "Honduras",
+        "Nicaragua", "Panama"]},
+    "Caribbean": {
+        "states": ["PR", "VI"],   # Puerto Rico and the US Virgin Islands
+        "countries": [
+            "Anguilla", "Antigua and Barbuda", "Aruba", "Barbados", "Bermuda",
+            "Bonaire, Sint Eustatius, and Saba", "British Virgin Islands",
+            "Cayman Islands", "Cuba", "Curacao", "Dominica",
+            "Dominican Republic", "Grenada", "Guadeloupe", "Haiti", "Jamaica",
+            "Martinique", "Netherlands Antilles", "Saint Barthelemy",
+            "Saint Kitts and Nevis", "Saint Lucia",
+            "Saint Vincent and the Grenadines", "Sint Maarten", "The Bahamas",
+            "Trinidad and Tobago", "Turks and Caicos Islands"]},
+    "South America": {"countries": [
+        "Argentina", "Bolivia", "Brazil", "Chile", "Colombia", "Ecuador",
+        "French Guiana", "Guyana", "Paraguay", "Peru", "Suriname", "Uruguay",
+        "Venezuela"]},
+    "Europe": {"countries": [
+        "Austria", "Belgium", "Berlin", "Bulgaria", "Croatia", "Cyprus",
+        "Czech Republic", "Czechoslovakia", "Denmark", "Finland", "France",
+        "Germany", "Greece", "Greenland", "Hungary", "Iceland", "Ireland",
+        "Italy", "Latvia", "Luxembourg", "Malta", "Netherlands", "Norway",
+        "Poland", "Portugal", "Romania", "Russia", "Serbia",
+        "Serbia and Montenegro", "Spain", "Sweden", "Switzerland", "Turkey",
+        "U.S.S.R.", "Ukraine", "United Kingdom", "West Germany", "Yugoslavia"]},
+    "Middle East": {"countries": [
+        "Azerbaijan", "Bahrain", "Iran", "Iraq", "Israel", "Jordan", "Kuwait",
+        "Qatar", "Saudi Arabia", "Syria", "United Arab Emirates",
+        "Uzbekistan"]},   # Azerbaijan/Uzbekistan: no better home (Thomas)
+    "Africa": {"countries": [
+        "Cape Verde", "Cote d'Ivoire", "Egypt", "Ethiopia", "Gabon", "Ghana",
+        "Guinea", "Kenya", "Liberia", "Morocco", "Mozambique", "Namibia",
+        "Nigeria", "Saint Helena, Ascension, and Tristan da Cunha", "Senegal",
+        "Somalia", "South Africa", "Sudan", "The Gambia", "Togo", "Tunisia",
+        "Zambia"]},
+    "South Asia": {"countries": ["India", "Pakistan"]},
+    "East Asia": {"countries": [
+        "China", "Hong Kong", "Japan", "Macau", "South Korea", "Taiwan"]},
+    "Southeast Asia": {"countries": [
+        "Indonesia", "Malaysia", "Philippines", "Singapore", "Thailand"]},
+    "Oceania": {"countries": [
+        "Australia", "Cook Islands", "Federated States of Micronesia", "Fiji",
+        "French Polynesia", "Kiribati", "Marshall Islands", "Nauru",
+        "New Caledonia", "New Zealand", "Niue", "Palau", "Papua New Guinea",
+        "Samoa", "Tonga"]},
+}
+REGION_PREFIX = "region:"
+_STATE_REGION = {s: name for name, d in REGIONS.items() for s in d.get("states", [])}
+_COUNTRY_REGION = {c: name for name, d in REGIONS.items() for c in d.get("countries", [])}
+
+
+def is_region(place) -> bool:
+    return isinstance(place, str) and place.startswith(REGION_PREFIX)
+
+
+def place_name(place) -> str:
+    """Display name: the region's name, or the airport code unchanged."""
+    return place[len(REGION_PREFIX):] if is_region(place) else place
+
+
+def region_label(name: str) -> str:
+    """Picker label; US regions list their states, foreign ones just the name."""
+    d = REGIONS[name]
+    if "countries" in d:
+        return f"Region — {name}"
+    return f"Region — {name} ({', '.join(d['states'])})"
+
+
+def region_of(city, country):
+    """Region key for an airport from its BTS city name ('Honolulu, HI') and
+    country, or None if it is in no region. State wins over country, since
+    Puerto Rico / Guam rows carry their own 'country'."""
+    name = None
+    if isinstance(city, str) and ", " in city:
+        name = _STATE_REGION.get(city.rsplit(", ", 1)[1])
+    name = name or _COUNTRY_REGION.get(country)
+    return REGION_PREFIX + name if name else None
+
+
+def place_sql(side: str, place, param: str) -> str:
+    """WHERE fragment matching `place` (airport code or region key) on the
+    'origin' or 'dest' side of gold.route_carrier_month aliased r. Bind the
+    values with place_params(place, param)."""
+    if not is_region(place):
+        return f"r.{side} = :{param}"
+    d, parts = REGIONS[place_name(place)], []
+    if d.get("states"):
+        parts.append(f"split_part(r.{side}_city, ', ', 2) = ANY(:{param}_s)")
+    if d.get("countries"):
+        parts.append(f"r.{side}_country = ANY(:{param}_c)")
+    return "(" + " OR ".join(parts) + ")"
+
+
+def place_params(place, param: str) -> dict:
+    if not is_region(place):
+        return {param: place}
+    d = REGIONS[place_name(place)]
+    return {f"{param}_{k[0]}": d[k] for k in ("states", "countries") if d.get(k)}
+
+
 # Brand-ish colors for the recognizable carriers; anything unlisted falls
 # back to plotly's default palette. Family codes reuse the survivor's color.
 CARRIER_COLORS = {
@@ -196,6 +405,16 @@ CARRIER_COLORS = {
     "TW": "#A0522D",  # TWA
     "FL": "#71C5E8",  # AirTran light blue
     "SY": "#F26522",  # Sun Country orange
+    # Single-partner regionals folded into families (Carrier Families bands).
+    "MQ": "#D3D9DD",      # Envoy / American Eagle - light silver
+    "OH": "#7FA9D9",      # PSA - light blue
+    "PT": "#5FB7B0",      # Piedmont - light teal
+    "OW": "#D9A77E",      # Executive - tan
+    "9E": "#F59E42",      # Endeavor / Pinnacle - orange
+    "OH (1)": "#B07CC6",  # Comair - mauve
+    "XJ": "#E3C567",      # Mesaba - sand
+    "C5": "#7FD1E8",      # CommuteAir - light cyan
+    "XE (1)": "#9C8ADE",  # ExpressJet - violet
 }
 
 

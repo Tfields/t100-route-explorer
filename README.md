@@ -214,7 +214,11 @@ departure-side counting:
 - `gold.family_month` / `gold.airport_family_month` — same metrics keyed by
   **carrier family** (`silver.dim_carrier_family` merger map: TWA/US Airways/
   America West→American, Northwest→Delta, Continental→United, AirTran→
-  Southwest, Virgin America/Hawaiian→Alaska), for continuous trend lines
+  Southwest, Virgin America/Hawaiian→Alaska; plus single-partner
+  regionals such as Envoy/PSA/Piedmont→American, Endeavor→Delta,
+  CommuteAir→United, Horizon→Alaska — multi-partner regionals like SkyWest
+  and Republic stay separate, since T-100 reports by operating carrier and
+  can't attribute them), for continuous trend lines
   across mergers. Pre-merger values are pro-forma combined.
 
 ## Visualizations

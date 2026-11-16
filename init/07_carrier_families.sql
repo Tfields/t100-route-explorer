@@ -10,6 +10,17 @@
 -- (sum of the then-independent companies). merged_month is documentation
 -- (approximate single-certificate/last-flight date), not used in joins.
 --
+-- Regional partners: T-100 is reported by OPERATING carrier, so a major's
+-- regional feed (American Eagle, Delta Connection, ...) sits under the
+-- regional's own code. Regionals that flew for ONE family through their whole
+-- T-100 history are mapped here too (note starts 'regional', merged_month
+-- NULL) so family seats/shares include that feed. Each was checked against
+-- its hub footprint by era. Multi-partner regionals (SkyWest OO, Republic YX,
+-- Mesa YV, ExpressJet/ASA EV, GoJet G7, Air Wisconsin ZW, Compass, Trans
+-- States, Chautauqua, Shuttle America) are deliberately NOT mapped: T-100
+-- cannot say which major a given flight was for. Note most regionals only
+-- start reporting T-100 in Oct 2002, so family lines step up that month.
+--
 -- Re-running this file refreshes the seed (TRUNCATE + INSERT).
 
 CREATE TABLE IF NOT EXISTS silver.dim_carrier_family (
@@ -35,7 +46,17 @@ INSERT INTO silver.dim_carrier_family (carrier, family, family_name, merged_mont
  ('FL', 'WN', 'Southwest Airlines family', '2014-12-01', 'AirTran, acquired by Southwest (last FL flight Dec 2014)'),
  ('AS', 'AS', 'Alaska Air Group family',   NULL,         'survivor'),
  ('VX', 'AS', 'Alaska Air Group family',   '2018-04-01', 'Virgin America, merged into Alaska (single certificate Jan 2018)'),
- ('HA', 'AS', 'Alaska Air Group family',   '2025-10-01', 'Hawaiian, acquired by Alaska Air Group Sep 2024; brand retained');
+ ('HA', 'AS', 'Alaska Air Group family',   '2025-10-01', 'Hawaiian, acquired by Alaska Air Group Sep 2024; brand retained'),
+ ('MQ',     'AA', 'American Airlines family', NULL, 'regional: Envoy Air (American Eagle), owned by American'),
+ ('OH',     'AA', 'American Airlines family', NULL, 'regional: PSA Airlines, US Airways Express then American Eagle; owned by US Airways/American'),
+ ('PT',     'AA', 'American Airlines family', NULL, 'regional: Piedmont Airlines, US Airways Express then American Eagle; owned by US Airways/American'),
+ ('OW',     'AA', 'American Airlines family', NULL, 'regional: Executive Airlines (American Eagle, San Juan), owned by American; ended 2013'),
+ ('9E',     'DL', 'Delta Air Lines family',   NULL, 'regional: Endeavor Air (ex-Pinnacle), Northwest Airlink then Delta Connection; owned by Delta since 2013'),
+ ('OH (1)', 'DL', 'Delta Air Lines family',   NULL, 'regional: Comair, Delta Connection, owned by Delta; ended 2012'),
+ ('XJ',     'DL', 'Delta Air Lines family',   NULL, 'regional: Mesaba, Northwest Airlink then Delta Connection; ended 2011'),
+ ('C5',     'UA', 'United Airlines family',   NULL, 'regional: CommuteAir, Continental Connection then United Express'),
+ ('XE (1)', 'UA', 'United Airlines family',   NULL, 'regional: ExpressJet (Continental Express, then United Express); a few % of 2007-08 flying was for Delta or own-brand; ended 2011'),
+ ('QX',     'AS', 'Alaska Air Group family',  NULL, 'regional: Horizon Air, owned by Alaska Air Group; ~6% of 2004-07 flying was Frontier JetExpress at DEN');
 
 -- ===========================================================================
 -- family_month: gold.carrier_month, but keyed by family - continuous lines

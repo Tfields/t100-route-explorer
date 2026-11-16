@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
-from warehouse import (MAP_DOT, MAP_LINE, SERIES_COLORS, clean_name,
+from warehouse import (MAP_DOT, MAP_LINE, SERIES_COLORS, about_data, clean_name,
                        label_line_ends, month_gaps, month_hover,
                        month_window, q, roll12, style_map)
 
@@ -17,6 +17,7 @@ st.set_page_config(page_title="T-100 Hub Utilization", page_icon="🛫", layout=
 st.title("🛫 Hub Utilization")
 st.caption("How the major carriers use their hubs, 1990–present. "
            "Scheduled passenger service, departures-side counting.")
+about_data()
 
 # --- mode + airline picker ---------------------------------------------------
 mode = st.radio("View by", ["Family (merger-adjusted)", "Carrier code"],

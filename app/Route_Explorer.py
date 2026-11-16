@@ -7,8 +7,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from warehouse import (MAP_DOT, TOTAL_LINE, carrier_color_map, month_gaps,
-                       month_hover, month_window, q, roll12, style_map)
+from warehouse import (MAP_DOT, MAP_LINE, REGION_PREFIX, REGIONS, TOTAL_LINE,
+                       about_data, carrier_color_map, is_region, month_gaps, month_hover,
+                       month_window, place_name, place_params, place_sql, q,
+                       region_label, region_of, roll12, style_map)
 
 st.set_page_config(page_title="T-100 Route Explorer", page_icon="✈️", layout="wide")
 
@@ -18,6 +20,7 @@ st.caption(
     "Nonstop routes touching the U.S. — BTS T-100, scheduled passenger service, "
     f"monthly, 1990 through {latest:%B %Y}."
 )
+about_data()
 
 # A carrier x direction x month needs at least this many performed departures
 # to count as service, unless "Show one-off flights" is ticked. Departures, not
@@ -30,6 +33,9 @@ airports = q("""
     FROM gold.route_carrier_month
     GROUP BY origin ORDER BY SUM(seats) DESC""")
 airport_label = dict(zip(airports.code, airports.code + " — " + airports.city.fillna("")))
+# Origin and destination can each be one airport or a region (a group of
+# US states or of foreign countries).
+region_labels = {REGION_PREFIX + name: region_label(name) for name in REGIONS}
 
 mode = st.radio("View by", ["Carrier code", "Family (merger-adjusted)"],
                 horizontal=True, key="view_mode",
@@ -41,20 +47,30 @@ KEY = "COALESCE(f.family, r.carrier)" if FAMILY else "r.carrier"
 NAME = "COALESCE(f.family_name, r.carrier_name)" if FAMILY else "r.carrier_name"
 
 c1, c2, c3 = st.columns([2, 2, 1])
-origin_codes = airports.code.tolist()
-origin = c1.selectbox("Origin", airports.code,
+origin_codes = list(region_labels) + airports.code.tolist()
+origin = c1.selectbox("Origin", origin_codes,
                       index=origin_codes.index("HNL") if "HNL" in origin_codes else 0,
-                      format_func=lambda c: airport_label.get(c, c))
-dests = q("""
-    SELECT dest AS code, MAX(dest_city) AS city
-    FROM gold.route_carrier_month
-    WHERE origin = :o GROUP BY dest ORDER BY SUM(seats) DESC""", o=origin)
+                      format_func=lambda c: region_labels.get(c) or airport_label.get(c, c),
+                      help="Pick an airport, or a region at the top of the "
+                           "list to combine every airport in it.")
+dests = q(f"""
+    SELECT r.dest AS code, MAX(r.dest_city) AS city,
+           MAX(r.dest_country) AS country, SUM(r.seats)::float AS seats
+    FROM gold.route_carrier_month r
+    WHERE {place_sql("origin", origin, "o")}
+    GROUP BY r.dest ORDER BY SUM(r.seats) DESC""", **place_params(origin, "o"))
 dest_label = dict(zip(dests.code, dests.code + " — " + dests.city.fillna("")))
-dest_codes = dests.code.tolist()
-dest = c2.selectbox("Destination", dests.code,
+# Regions this origin actually reaches, biggest first, ahead of the airports.
+dest_regions = (dests.assign(region=[region_of(c, k) for c, k
+                                     in zip(dests.city, dests.country)])
+                     .dropna(subset=["region"]).groupby("region").seats.sum()
+                     .sort_values(ascending=False).index.tolist())
+dest_codes = dest_regions + dests.code.tolist()
+dest = c2.selectbox("Destination", dest_codes,
                     index=(dest_codes.index("LAX")
                            if origin == "HNL" and "LAX" in dest_codes else 0),
-                    format_func=lambda c: dest_label.get(c, c))
+                    format_func=lambda c: region_labels.get(c) or dest_label.get(c, c))
+REGIONAL = is_region(origin) or is_region(dest)
 both_dirs = c3.checkbox("Combine both directions", value=True,
                         help="Include the return leg; measures are summed and "
                              "load factor recomputed on the combined totals.")
@@ -74,9 +90,12 @@ df = q(f"""
            MAX(r.dest_lat)::float AS d_lat, MAX(r.dest_lon)::float AS d_lon
     FROM gold.route_carrier_month r
     LEFT JOIN silver.dim_carrier_family f ON f.carrier = r.carrier
-    WHERE (r.origin = :o AND r.dest = :d) OR (:b AND r.origin = :d AND r.dest = :o)
+    WHERE r.origin <> r.dest AND (
+          ({place_sql("origin", origin, "o")} AND {place_sql("dest", dest, "d")})
+       OR (:b AND {place_sql("origin", dest, "d")} AND {place_sql("dest", origin, "o")}))
     GROUP BY r.flight_month, {KEY}, r.origin, r.dest
-    ORDER BY r.flight_month""", o=origin, d=dest, b=both_dirs)
+    ORDER BY r.flight_month""",
+    **place_params(origin, "o"), **place_params(dest, "d"), b=both_dirs)
 
 if df.empty:
     st.info("No scheduled passenger service recorded on this route.")
@@ -123,7 +142,13 @@ if sel.empty:
 # --- headline metrics -------------------------------------------------------
 last12 = sel[sel.flight_month > sel.flight_month.max() - pd.DateOffset(months=12)]
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("Distance", f"{sel.distance_miles.max():,.0f} mi")
+if REGIONAL:
+    pairs = sel[["origin", "dest"]].apply(lambda r: frozenset(r), axis=1).nunique()
+    m1.metric("Airport pairs", f"{pairs:,}",
+              f"avg {(sel.distance_miles * sel.seats).sum() / sel.seats.sum():,.0f} mi",
+              delta_color="off")
+else:
+    m1.metric("Distance", f"{sel.distance_miles.max():,.0f} mi")
 m2.metric("Carriers shown", f"{sel.carrier.nunique()}")
 m3.metric("Passengers, last 12 mo shown", f"{last12.passengers.sum():,.0f}")
 m4.metric("Load factor, last 12 mo shown",
@@ -143,7 +168,9 @@ if smooth:
     lf = roll12(lf, "carrier_name", "load_factor")
     ycol = "load_factor_12m"
 
-route_title = f"{origin} ⇄ {dest}" if both_dirs else f"{origin} → {dest}"
+route_title = (f"within {place_name(origin)}" if origin == dest
+               else f"{place_name(origin)} ⇄ {place_name(dest)}" if both_dirs
+               else f"{place_name(origin)} → {place_name(dest)}")
 colors = carrier_color_map(sel)
 # Months a carrier didn't fly become gaps, not straight connecting lines.
 fig = px.line(month_gaps(lf, "carrier_name"), x="flight_month", y=ycol,
@@ -239,7 +266,30 @@ g2.caption(gap_blurb)
 
 # --- the route on a map -----------------------------------------------------
 ends = sel.dropna(subset=["o_lat", "d_lat"])
-if not ends.empty:
+if REGIONAL and not ends.empty:
+    # Every airport pair in the selection, heaviest 150 drawn, width ~ seats.
+    legs = (ends.groupby(["origin", "dest"], as_index=False)
+                .agg(seats=("seats", "sum"), o_lat=("o_lat", "max"),
+                     o_lon=("o_lon", "max"), d_lat=("d_lat", "max"),
+                     d_lon=("d_lon", "max"))
+                .nlargest(150, "seats"))
+    figm = go.Figure()
+    for r in legs.itertuples():
+        figm.add_trace(go.Scattergeo(
+            lon=[r.o_lon, r.d_lon], lat=[r.o_lat, r.d_lat], mode="lines",
+            line=dict(width=max(0.4, 4 * r.seats / legs.seats.max()), color=MAP_LINE),
+            hoverinfo="skip"))
+    pts = pd.concat([
+        legs[["origin", "o_lat", "o_lon"]].set_axis(["code", "lat", "lon"], axis=1),
+        legs[["dest", "d_lat", "d_lon"]].set_axis(["code", "lat", "lon"], axis=1),
+    ]).drop_duplicates("code")
+    figm.add_trace(go.Scattergeo(
+        lon=pts.lon, lat=pts.lat, mode="markers", text=pts.code,
+        hoverinfo="text", marker=dict(size=5, color=MAP_DOT)))
+    style_map(figm, fit=True)
+    figm.update_layout(height=450, margin=dict(l=0, r=0, t=10, b=0), showlegend=False)
+    st.plotly_chart(figm, use_container_width=True)
+elif not ends.empty:
     r = ends.iloc[0]
     figm = go.Figure(go.Scattergeo(
         lon=[r.o_lon, r.d_lon], lat=[r.o_lat, r.d_lat],

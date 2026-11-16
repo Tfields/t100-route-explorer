@@ -181,6 +181,24 @@ CO→UA 2012, US→AA 2015) — real events, not bugs.
   pre-merger values are pro-forma combined. merged_month is documentation
   only. 07 supersedes 06's gold.refresh_all() to include the family views.
 
+- **Regional partners folded into families (2026-11-15).** T-100 reports by
+  OPERATING carrier, so regional feed sat outside the families and fortress
+  shares were understated. `dim_carrier_family` now also maps regionals that
+  flew for ONE family through their whole T-100 history (note starts
+  `regional`, merged_month NULL; 24 rows total): MQ/OH/PT/OW → AA,
+  9E/`OH (1)` Comair/XJ → DL, C5/`XE (1)` → UA, QX → AS. Each was checked
+  against its hub footprint by era. Known impurities, accepted: QX ~6% at
+  DEN 2004–07 (Frontier JetExpress); XE (1) a few % for Delta/own-brand
+  2007–08. Multi-partner regionals (OO, YX, YV, EV, G7, ZW, CP (2), AX, RP,
+  S5) are deliberately unmapped — T-100 cannot attribute them; the planned
+  fix is BTS on-time marketing-carrier data (2018+, domestic). Totals
+  invariant re-verified exact. Latest-12-mo shares moved e.g. AA@CLT
+  69.5→88.5%, AA@DFW 66.0→79.3%, DL@ATL 73.4→77.4%, AS@SEA 44.8→50.2%.
+  Most regionals only start reporting T-100 in Oct 2002, so family lines
+  step up that month. Carrier Families orders members survivor → merged →
+  regional. Local PG + export/out are rebuilt; a new Release is needed
+  before the hosted app sees it.
+
 ## STREAMLIT APP (app/)
 Four pages (shared `month_window()` helper in warehouse.py: month-range
 select_slider defaulting Jan 2022 → latest on every page except
@@ -264,6 +282,30 @@ Inc./Co./Ltd. etc.; applied to `carrier_name` inside `q()`). UA/HA/B6/F9/NW/US
 brand colors lightened to clear 3:1 on #0E1117. Hub Utilization ranks
 airlines and "today's" hubs on the latest 12 months, not a fixed year.
 NOT yet eyeballed in a browser (no headless Chrome/kaleido on this machine).
+**Regions (2026-11-15):** Route Explorer's origin and destination pickers
+accept a region as well as an airport (keys `region:<name>`, listed first).
+`warehouse.REGIONS` is AUTHORED, groupings chosen by Thomas: US regions are
+state lists (West Coast, Hawaii, Alaska, Mountain West, Texas, Midwest,
+Southeast, Florida, Mid-Atlantic = DC/DE/MD/VA/WV, Northeast, Pacific
+territories = BTS state "TT"), matched on the BTS city-name suffix
+(`split_part(city, ', ', 2)`); foreign regions are country lists matched on
+the country column (Canada and Mexico alone, Central America, Caribbean
+[includes PR/VI by state code], South America, Europe, Middle East, Africa,
+South Asia, East Asia, Southeast Asia, Oceania). No warehouse change.
+Judgment calls made by Claude and flagged to Thomas: Turkey/Russia/Cyprus/
+Greenland in Europe, Egypt in Africa, Bermuda in Caribbean, Hong Kong/Macau
+in East Asia, Micronesia/Marshalls/Palau in Oceania, "Latin America" read as
+Central America. Thomas confirmed all of these and put Azerbaijan and
+Uzbekistan in Middle East for lack of a better home.
+Queries go through `place_sql()` / `place_params()`. Region mode shows an
+airport-pair count + seat-weighted distance and maps the heaviest 150 pairs.
+The one-off floor still applies per airport pair. Not yet on other pages.
+**About the data (2026-11-15):** `warehouse.about_data()` renders a
+collapsed expander under the title on all four pages — source, segment-vs-
+journey caveat, load factor definition, operating-carrier reporting, family
+membership (read live from dim_carrier_family), the unattributed
+multi-partner regionals, the Oct 2002 regional reporting step, and the
+region definitions. No author byline yet (Thomas to decide).
 Maps use Scattergeo resolution=50 (1:50m) with subunits + lakes.
 warehouse.py also has CARRIER_COLORS (brand colors by code: UA blue,
 DL red, AA grey, AS green, HA purple, WN yellow, ...) +
