@@ -85,8 +85,6 @@ export/
   export_gold.py   gold + dim_carrier_family -> zstd Parquet, for hosting
 notebooks/
   hub_utilization_eda.ipynb  Jupyter + plotly EDA
-.github/workflows/
-  ingest.yml       monthly scheduled run (+ manual trigger)
 ```
 
 ## Ingestion
@@ -160,10 +158,9 @@ month is well within polite use of a public data service. The fragility risk
 (BTS redesigns the page) is contained: the loader fails loudly if the form
 doesn't parse, and `meta.ingest_batch` keeps the durable `failed` record.
 
-### Scheduling (pick one)
-- **GitHub Actions** — `.github/workflows/ingest.yml` runs monthly + on demand.
-  Put `PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE` in repo secrets. Best when
-  the DB is reachable from the runner (managed/cloud Postgres).
+### Refreshing
+Run by hand after a BTS release: the four flavors × `--year prev` +
+`--year latest`, then `SELECT gold.refresh_all();`. To automate instead:
 - **cron on the DB host** — simplest for a private DB:
   ```cron
   # 09:00 on the 5th each month
