@@ -12,6 +12,7 @@ Either way `q()` is unchanged: page SQL doesn't know which backend it's on.
 import os
 import pathlib
 import re
+import threading
 import urllib.request
 
 import pandas as pd
@@ -71,12 +72,22 @@ def engine():
     return eng
 
 
+# One query at a time. On the duckdb backend every thread shares the single
+# StaticPool connection, and Streamlit runs each rerun/session in its own
+# thread - a slider drag fires overlapping reruns. Unserialized, that corrupts
+# the connection's transaction state (TransactionException / CatalogException,
+# and segfaults under load; reproduced with 6 threads). Queries are short and
+# cached, so serializing costs nothing noticeable.
+_QUERY_LOCK = threading.Lock()
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def q(sql: str, **params) -> pd.DataFrame:
     """Query the warehouse into a DataFrame. Results cached for an hour
     (the data only changes on monthly loads)."""
-    with engine().connect() as c:
-        df = pd.read_sql(text(sql), c, params=params)
+    with _QUERY_LOCK:
+        with engine().connect() as c:
+            df = pd.read_sql(text(sql), c, params=params)
     # Postgres DATE arrives as python date objects; charts and .dt need datetimes.
     if "flight_month" in df.columns:
         df["flight_month"] = pd.to_datetime(df["flight_month"])
