@@ -18,7 +18,7 @@ import urllib.request
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool
 
 BACKEND = os.environ.get("T100_BACKEND", "postgres")
 DSN = os.environ.get("T100_DSN", "postgresql+psycopg2://t100:t100@localhost:5432/t100")
@@ -45,7 +45,11 @@ def _local_parquet(name: str) -> pathlib.Path:
             raise FileNotFoundError(
                 f"{path} not found and $T100_PARQUET_URL isn't set to fetch it")
         PARQUET_DIR.mkdir(parents=True, exist_ok=True)
-        urllib.request.urlretrieve(f"{PARQUET_URL.rstrip('/')}/{name}.parquet", path)
+        # Download to a temp name and rename, so an interrupted download
+        # (e.g. a redeploy mid-fetch) never leaves a truncated file behind.
+        tmp = path.with_suffix(".parquet.part")
+        urllib.request.urlretrieve(f"{PARQUET_URL.rstrip('/')}/{name}.parquet", tmp)
+        tmp.replace(path)
     return path
 
 
@@ -54,30 +58,33 @@ def engine():
     if BACKEND != "duckdb":
         return create_engine(DSN, pool_pre_ping=True)
 
-    # StaticPool pins the engine to one physical connection for its whole
-    # lifetime. Without it, SQLAlchemy's default pool can hand back a
-    # different duckdb connection per .connect() call, and each fresh
-    # connection to ':memory:' is its own empty database — the views built
-    # below would silently vanish for later queries.
-    eng = create_engine("duckdb:///:memory:", poolclass=StaticPool)
+    # The views live in a small DuckDB FILE next to the Parquet, not in
+    # ':memory:'. Every fresh connection to ':memory:' is its own empty
+    # database, so the old single pinned connection was a single point of
+    # failure: once it was replaced (after an error, or by a different
+    # library version's pooling) every query failed with "table does not
+    # exist" until the app was rebooted. With a file, any connection sees the
+    # views, so each query simply opens its own (NullPool) and closes it.
+    PARQUET_DIR.mkdir(parents=True, exist_ok=True)
+    eng = create_engine(f"duckdb:///{(PARQUET_DIR / 't100_views.duckdb').as_posix()}",
+                        poolclass=NullPool)
     with eng.connect() as c:
         for schema, tables in DUCKDB_TABLES.items():
             c.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema}"))
             for name in tables:
                 path = _local_parquet(name)
                 c.execute(text(
-                    f"CREATE VIEW {schema}.{name} AS "
+                    f"CREATE OR REPLACE VIEW {schema}.{name} AS "
                     f"SELECT * FROM read_parquet('{path.as_posix()}')"))
         c.commit()
     return eng
 
 
-# One query at a time. On the duckdb backend every thread shares the single
-# StaticPool connection, and Streamlit runs each rerun/session in its own
-# thread - a slider drag fires overlapping reruns. Unserialized, that corrupts
-# the connection's transaction state (TransactionException / CatalogException,
-# and segfaults under load; reproduced with 6 threads). Queries are short and
-# cached, so serializing costs nothing noticeable.
+# One query at a time. Streamlit runs each rerun/session in its own thread and
+# a slider drag fires overlapping reruns; sharing a duckdb connection across
+# threads corrupted it (TransactionException, segfaults - reproduced with 6
+# threads). Each query now has its own connection, and the lock stays as
+# cheap insurance: queries are short and cached.
 _QUERY_LOCK = threading.Lock()
 
 

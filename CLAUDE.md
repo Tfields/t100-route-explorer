@@ -332,13 +332,20 @@ cold start. Free managed Postgres was ruled out by measurement: gold is
   (Route Explorer origin change and carrier/family mode toggle, both
   re-query cleanly) + a real headless server boot on all 4 routes (200s,
   clean log).
-- **Threading gotcha (found in production 2026-11-15):** StaticPool means
-  every thread shares ONE duckdb connection, and Streamlit runs each
-  rerun/session in its own thread. Dragging a range slider on the hosted app
-  fired overlapping reruns and the query died with CatalogException /
-  ProgrammingError; reproduced locally with 6 threads (TransactionException,
-  then a segfault). AppTest never shows it — it is single-threaded. Fix:
-  `q()` holds a module-level `threading.Lock` around connect + read_sql.
+- **Production failure + redesign (2026-11-15) — supersedes the StaticPool
+  notes above.** The `:memory:` + StaticPool design had two faults: (1) every
+  thread shared one duckdb connection while Streamlit runs each rerun in its
+  own thread, so a slider drag fired overlapping queries on it (reproduced
+  locally with 6 threads: TransactionException, then a segfault; AppTest is
+  single-threaded and never shows it); (2) once that connection was replaced
+  after an error, the new `:memory:` database was empty and EVERY query
+  failed with CatalogException until a reboot — and a redeploy did not clear
+  it, because `st.cache_resource` kept the old engine while `engine()`'s
+  source was unchanged. Now: views live in a DuckDB file
+  (`$T100_PARQUET_DIR/t100_views.duckdb`, `CREATE OR REPLACE VIEW` on
+  startup), the engine uses `NullPool` (one connection per query, any
+  connection sees the views), `q()` also holds a `threading.Lock`, and
+  Parquet downloads go to a `.part` file then rename.
 - **Repo + Release published 2026-07-21**: local dir git-init'd, pushed to
   `https://github.com/Tfields/t100-route-explorer` (public). Re-ran
   `export/export_gold.py` first (confirmed `max(flight_month) = 2026-04-01`
