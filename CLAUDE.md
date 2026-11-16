@@ -45,7 +45,6 @@ app/pages/3_Destinations.py     nonstops from one airport + performers/momentum
 app/pages/4_Carrier_Families.py family mergers + route churn
 app/warehouse.py            shared cached query helper (postgres or duckdb backend, see HOSTING)
 export/export_gold.py       gold + dim_carrier_family -> zstd Parquet, for the DuckDB-backed hosted app
-.github/workflows/ingest.yml monthly scheduled run
 ```
 
 ## Commands
@@ -129,10 +128,13 @@ docker exec t100_postgres psql -U t100 -d t100 -c "SELECT gold.refresh_all();"
   deployments set a real password and use env/secrets, not the compose default.
 
 ## Open items
-1. **Monthly run without a hosted DB.** GitHub Actions can't reach a database
-   that only lives on a local machine; schedule the four `--year latest` +
-   `--year prev` loads via launchd/cron locally (or run them by hand after
-   each BTS release), followed by `SELECT gold.refresh_all();`.
+1. **Refresh is manual, by decision (2026-11-02).** No scheduler: the
+   GitHub Actions workflow was deleted (it couldn't reach the laptop-local DB
+   and failed every month Aug–Oct 2026), and launchd/cron was declined. Run the
+   four flavors × `--year prev` + `--year latest` by hand, then
+   `SELECT gold.refresh_all();` (~6 min), then re-export + new Release for the
+   hosted app. Last catch-up 2026-11-02 (batches 243–250, data through
+   2026-07).
 2. **Remaining unwired lookups** (low value): `l_carrier` (carrier names come
    inline in the facts), `l_world_area_code`, `l_distance_group_500` — the
    `Download_Lookup.asp` pattern covers them if ever needed.
@@ -235,6 +237,33 @@ operating member codes via STRING_AGG).
 Streamlit 1.50 API split: st.dataframe takes width='stretch' but
 st.plotly_chart still needs use_container_width=True (width= is
 swallowed into plotly config kwargs and warns).
+Line charts autoscale their y axis (no `rangemode="tozero"`) and pass
+through `warehouse.month_gaps(df, by)`, which inserts NaN rows for months
+missing inside each series' span so plotly breaks the line instead of
+bridging no-service months (e.g. AS-code HNL–LAX Apr–Dec 2025). The Route
+Explorer LF chart uses lines+markers so a lone month between gaps stays
+visible. Gap-fill runs AFTER roll12 (which still rolls over rows, not
+calendar months).
+Route Explorer hides one-off flights by default: rows (carrier/family x
+direction x month) with 2 or fewer performed departures (`MIN_DEPARTURES`
+= 3) are dropped right after the query unless "Show one-off flights" is ticked
+(decided 2026-11-15; floor is on departures, not seats, so it is route-size
+independent; `departures_scheduled = 0` was rejected as the signal — ~11% of
+seats since 2022 report zero scheduled, incl. real AS service).
+**Dark-surface pass (2026-11-15):** theme pinned to dark in
+`.streamlit/config.toml`; shared styling lives in warehouse.py —
+`style_map()` (dark geo colors; default frame is North America, lon −170..−55
+/ lat 7..72, so AK, HI, the Caribbean and Central America show and longer
+routes run off the edge; `fit=True` zooms to the points, used by Route
+Explorer), `month_hover()` (x-unified hover, "Mar 2025" header, formatted
+values), `label_line_ends()` (neutral direct labels on Hub Utilization
+lines), `SERIES_COLORS` (fixed categorical order for hub airports — the
+Streamlit default palette pairs light/dark blues and greens, which is why
+DEN/LAS and PHX/DAL looked alike), `TOTAL_LINE`, and `clean_name()` (strips
+Inc./Co./Ltd. etc.; applied to `carrier_name` inside `q()`). UA/HA/B6/F9/NW/US
+brand colors lightened to clear 3:1 on #0E1117. Hub Utilization ranks
+airlines and "today's" hubs on the latest 12 months, not a fixed year.
+NOT yet eyeballed in a browser (no headless Chrome/kaleido on this machine).
 Maps use Scattergeo resolution=50 (1:50m) with subunits + lakes.
 warehouse.py also has CARRIER_COLORS (brand colors by code: UA blue,
 DL red, AA grey, AS green, HA purple, WN yellow, ...) +
@@ -318,7 +347,13 @@ cold start. Free managed Postgres was ruled out by measurement: gold is
 - **Not yet done: the Community Cloud deploy itself** (share.streamlit.io UI,
   no CLI/API) — connect repo `Tfields/t100-route-explorer`, branch `main`,
   main file `app/Route_Explorer.py`; set secrets `T100_BACKEND=duckdb` and
-  `T100_PARQUET_URL` (value above).
+  `T100_PARQUET_URL=https://github.com/Tfields/t100-route-explorer/releases/latest/download`
+  (the `latest` alias tracks the newest Release, so future refreshes need no
+  secret change — just a Reboot so the app re-downloads on cold start).
+- **Release `gold-2026-07` published 2026-11-02** (data through 2026-07,
+  84.0 MB, 6 assets). All 4 pages verified via AppTest against the `latest`
+  URL into an empty cache dir. Note: AppTest on the main page needs `app/`
+  on `sys.path` (`streamlit run` adds it; AppTest doesn't).
 
 ## Monthly incremental load — first real run (2026-07-20)
 Ran the routine `README.md`/open-item #1 describes (by hand, not yet

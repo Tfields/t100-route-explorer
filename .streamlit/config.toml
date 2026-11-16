@@ -1,0 +1,4 @@
+# Pin the app to dark so chart and map colors are designed for one surface
+# instead of following each viewer's system setting.
+[theme]
+base = "dark"

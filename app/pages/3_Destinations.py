@@ -8,7 +8,8 @@ import plotly.graph_objects as go
 import streamlit as st
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
-from warehouse import carrier_color_map, month_window, q
+from warehouse import (MAP_DOT, MAP_LINE, carrier_color_map, month_gaps,
+                       month_hover, month_window, q, style_map)
 
 st.set_page_config(page_title="T-100 Destinations", page_icon="🌐", layout="wide")
 
@@ -71,8 +72,9 @@ per_dest["load_factor"] = 100 * per_dest.passengers / per_dest.seats
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Destinations", f"{len(per_dest):,}")
 m2.metric("Carriers", f"{sel.carrier.nunique()}")
-m3.metric("Passengers", f"{sel.passengers.sum():,.0f}")
-m4.metric("Load factor", f"{100 * sel.passengers.sum() / sel.seats.sum():.1f}%")
+span = f"{w0:%b %Y} – {w1:%b %Y}"
+m3.metric(f"Passengers, {span}", f"{sel.passengers.sum():,.0f}")
+m4.metric(f"Load factor, {span}", f"{100 * sel.passengers.sum() / sel.seats.sum():.1f}%")
 
 # --- spoke map ---------------------------------------------------------------
 ends = per_dest.dropna(subset=["d_lat", "d_lon"])
@@ -85,23 +87,18 @@ if not ends.empty and not origin_pt.empty:
         figm.add_trace(go.Scattergeo(
             lon=[o.o_lon, r.d_lon], lat=[o.o_lat, r.d_lat], mode="lines",
             line=dict(width=max(0.4, 3.5 * r.seats / max_seats),
-                      color="rgba(178,34,34,0.35)"),
+                      color=MAP_LINE),
             hoverinfo="skip", showlegend=False))
     figm.add_trace(go.Scattergeo(
         lon=ends.d_lon, lat=ends.d_lat, mode="markers",
-        marker=dict(size=5, color="rgb(120,20,20)"),
+        marker=dict(size=5, color=MAP_DOT),
         text=(ends.dest + " — " + ends.dest_city.fillna("")
               + "<br>seats: " + ends.seats.map("{:,.0f}".format)
               + "<br>passengers: " + ends.passengers.map("{:,.0f}".format)
               + "<br>load factor: " + ends.load_factor.map("{:.1f}%".format)
               + "<br>carriers: " + ends.carriers.astype(str)),
         hoverinfo="text", showlegend=False))
-    figm.update_geos(projection_type="natural earth", resolution=50,
-                     showcountries=True, countrycolor="rgb(180,180,180)",
-                     showsubunits=True, subunitcolor="rgb(215,215,215)",
-                     showlakes=True, lakecolor="rgb(220,235,245)",
-                     coastlinecolor="rgb(160,160,160)",
-                     landcolor="rgb(243,243,238)")
+    style_map(figm)
     figm.update_layout(height=550, margin=dict(l=0, r=0, t=30, b=0),
                        title=f"Nonstops from {apt}, {w0:%b %Y} – {w1:%b %Y} "
                              f"({len(ends)} mapped destinations; width ~ seats)")
@@ -139,10 +136,10 @@ trend = (sel.groupby("flight_month")
                  seats=("seats", "sum"), passengers=("passengers", "sum"))
             .reset_index())
 trend["load_factor"] = 100 * trend.passengers / trend.seats
-figt = px.line(trend, x="flight_month", y="destinations",
+figt = px.line(month_gaps(trend), x="flight_month", y="destinations",
                title=f"Destinations served from {apt} by month",
                labels={"destinations": "nonstop destinations", "flight_month": ""})
-figt.update_yaxes(rangemode="tozero")
+month_hover(figt, ",.0f")
 g2.plotly_chart(figt, use_container_width=True)
 
 # --- best & worst performers -------------------------------------------------

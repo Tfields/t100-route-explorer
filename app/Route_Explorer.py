@@ -7,7 +7,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from warehouse import carrier_color_map, month_window, q, roll12
+from warehouse import (MAP_DOT, TOTAL_LINE, carrier_color_map, month_gaps,
+                       month_hover, month_window, q, roll12, style_map)
 
 st.set_page_config(page_title="T-100 Route Explorer", page_icon="✈️", layout="wide")
 
@@ -17,6 +18,11 @@ st.caption(
     "Nonstop routes touching the U.S. — BTS T-100, scheduled passenger service, "
     f"monthly, 1990 through {latest:%B %Y}."
 )
+
+# A carrier x direction x month needs at least this many performed departures
+# to count as service, unless "Show one-off flights" is ticked. Departures, not
+# seats, so the floor means the same thing on a trunk route and a thin one.
+MIN_DEPARTURES = 3
 
 # --- route pickers ----------------------------------------------------------
 airports = q("""
@@ -52,10 +58,16 @@ dest = c2.selectbox("Destination", dests.code,
 both_dirs = c3.checkbox("Combine both directions", value=True,
                         help="Include the return leg; measures are summed and "
                              "load factor recomputed on the combined totals.")
+show_oneoffs = c3.checkbox(
+    "Show one-off flights", value=False,
+    help=f"Off: hides any carrier-month with {MIN_DEPARTURES - 1} or fewer "
+         "departures in a direction (diversions, extra sections) so a single "
+         "flight doesn't show up as a month of service.")
 
 df = q(f"""
     SELECT r.flight_month, {KEY} AS carrier, MAX({NAME}) AS carrier_name,
            SUM(r.seats)::float AS seats, SUM(r.passengers)::float AS passengers,
+           SUM(r.departures)::float AS departures,
            MAX(r.distance_miles)::float AS distance_miles,
            r.origin, r.dest,
            MAX(r.origin_lat)::float AS o_lat, MAX(r.origin_lon)::float AS o_lon,
@@ -69,6 +81,13 @@ df = q(f"""
 if df.empty:
     st.info("No scheduled passenger service recorded on this route.")
     st.stop()
+
+if not show_oneoffs:
+    df = df[df.departures >= MIN_DEPARTURES]
+    if df.empty:
+        st.info("Only one-off flights recorded on this route — tick "
+                "“Show one-off flights” to see them.")
+        st.stop()
 
 # --- filters ----------------------------------------------------------------
 f1, f2, f3 = st.columns([3, 2, 1])
@@ -126,14 +145,19 @@ if smooth:
 
 route_title = f"{origin} ⇄ {dest}" if both_dirs else f"{origin} → {dest}"
 colors = carrier_color_map(sel)
-fig = px.line(lf, x="flight_month", y=ycol, color="carrier_name",
+# Months a carrier didn't fly become gaps, not straight connecting lines.
+fig = px.line(month_gaps(lf, "carrier_name"), x="flight_month", y=ycol,
+              color="carrier_name",
               color_discrete_map=colors,
               title=f"Load factor by month — {route_title}",
               labels={ycol: "load factor %", "flight_month": "", "carrier_name": ""})
-fig.update_yaxes(rangemode="tozero")
+# Small markers keep a lone month between two gaps visible (a line needs
+# two adjacent points to draw). Y axis autoscales to the data.
+fig.update_traces(mode="lines+markers", marker_size=4)
+month_hover(fig, ".1f", "%")
 for tr in fig.data:  # make the combined line stand out
     if tr.name == "All selected":
-        tr.update(line=dict(color="black", width=3, dash="dot"))
+        tr.update(line=dict(color=TOTAL_LINE, width=3, dash="dot"))
 st.plotly_chart(fig, use_container_width=True)
 
 # --- seats vs passengers ----------------------------------------------------
@@ -141,10 +165,12 @@ vol = combined.melt(id_vars="flight_month", value_vars=["seats", "passengers"],
                     var_name="measure", value_name="count")
 if smooth:
     vol = roll12(vol, "measure", "count")
-fig2 = px.line(vol, x="flight_month", y="count_12m" if smooth else "count",
+fig2 = px.line(month_gaps(vol, "measure"), x="flight_month",
+               y="count_12m" if smooth else "count",
                color="measure", title=f"Capacity vs demand — {route_title} (all selected carriers)",
                labels={"count": "per month", "count_12m": "per month (12-mo avg)",
                        "flight_month": "", "measure": ""})
+month_hover(fig2, ",.0f")
 st.plotly_chart(fig2, use_container_width=True)
 
 # --- share gap: who's big vs who's full --------------------------------------
@@ -218,14 +244,9 @@ if not ends.empty:
     figm = go.Figure(go.Scattergeo(
         lon=[r.o_lon, r.d_lon], lat=[r.o_lat, r.d_lat],
         mode="lines+markers+text", text=[r.origin, r.dest],
-        textposition="top center", line=dict(width=2, color="firebrick"),
-        marker=dict(size=6, color="firebrick")))
-    figm.update_geos(projection_type="natural earth", resolution=50,
-                     showcountries=True, countrycolor="rgb(180,180,180)",
-                     showsubunits=True, subunitcolor="rgb(215,215,215)",
-                     showlakes=True, lakecolor="rgb(220,235,245)",
-                     coastlinecolor="rgb(160,160,160)",
-                     landcolor="rgb(243,243,238)", fitbounds="locations")
+        textposition="top center", line=dict(width=2, color=MAP_DOT),
+        marker=dict(size=6, color=MAP_DOT)))
+    style_map(figm, fit=True)
     figm.update_layout(height=350, margin=dict(l=0, r=0, t=10, b=0), showlegend=False)
     st.plotly_chart(figm, use_container_width=True)
 else:

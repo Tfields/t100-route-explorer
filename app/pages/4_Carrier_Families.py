@@ -7,7 +7,7 @@ import plotly.express as px
 import streamlit as st
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
-from warehouse import CARRIER_COLORS, month_window, q, roll12
+from warehouse import CARRIER_COLORS, month_gaps, month_window, q, roll12
 
 st.set_page_config(page_title="T-100 Carrier Families", page_icon="🧬", layout="wide")
 
@@ -120,6 +120,7 @@ for tr in figa.data:
     tr.fillcolor = fam_colors.get(tr.name, tr.line.color)
     tr.line.update(width=1, color="white")
 add_merger_lines(figa)
+figa.update_xaxes(hoverformat="%b %Y")
 figa.update_layout(legend=dict(orientation="h", y=-0.18, x=0))
 g1.plotly_chart(figa, use_container_width=True)
 
@@ -130,14 +131,14 @@ if smooth:
     net = roll12(net, "fam", "routes_served").dropna(subset=["routes_served_12m"])
     rcol = "routes_served_12m"
 net = net[net.flight_month.between(w0, w1)]
-fign = px.line(net, x="flight_month", y=rcol,
+fign = px.line(month_gaps(net), x="flight_month", y=rcol,
                color_discrete_sequence=[fam_colors.get(fam, "#444444")],
                hover_data={"airports_served": True},
                title=f"{fam_label[fam]} — routes served{suffix}",
                labels={rcol: "directional routes with service",
                        "flight_month": "", "airports_served": "airports"})
-fign.update_yaxes(rangemode="tozero")
 add_merger_lines(fign)
+fign.update_xaxes(hoverformat="%b %Y")
 g2.plotly_chart(fign, use_container_width=True)
 g2.caption("Family view: pre-merger months count the then-independent members "
            "combined, so the line is continuous across mergers.")
